@@ -1674,8 +1674,8 @@ fn print_doctor(report: &doctor::Report) {
         report.cache.entries, report.cache.bytes
     );
     println!(
-        "summary: {} ok, {} failed",
-        report.summary.ok, report.summary.failed
+        "summary: {} ok, {} stale, {} failed",
+        report.summary.ok, report.summary.stale, report.summary.failed
     );
 }
 

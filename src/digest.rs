@@ -97,18 +97,21 @@ fn beach() -> DigestLine {
     match beach::fetch() {
         Ok(report) => {
             let ungraded = report.count.saturating_sub(report.graded);
+            let ecoli = report
+                .ecoli_source
+                .as_deref()
+                .and_then(|url| url.rsplit('/').next())
+                .and_then(|file| file.strip_prefix("beach-historical-data-"))
+                .and_then(|rest| rest.get(0..4))
+                .map_or_else(
+                    || "E. coli unavailable".to_string(),
+                    |year| format!("E. coli {year}"),
+                );
             line(
                 "beach",
                 format!(
-                    "{} graded, {} open, {} not graded (EPD {})",
-                    report.graded,
-                    report.open,
-                    ungraded,
-                    report
-                        .ecoli_source
-                        .as_deref()
-                        .and_then(|url| url.rsplit('/').next())
-                        .unwrap_or("E. coli unavailable")
+                    "{} graded, {} open, {} not graded, {ecoli}",
+                    report.graded, report.open, ungraded
                 ),
             )
         }

@@ -67,6 +67,8 @@ pub struct Check {
 pub struct Summary {
     /// Checks with status `ok`.
     pub ok: usize,
+    /// Checks that answered with a payload older than allowed.
+    pub stale: usize,
     /// Checks that failed or mismatched.
     pub failed: usize,
 }
@@ -98,10 +100,10 @@ pub struct Report {
 }
 
 impl Report {
-    /// Whether every probe passed.
+    /// Whether every probe passed and served fresh data.
     #[must_use]
     pub fn healthy(&self) -> bool {
-        self.summary.failed == 0
+        self.summary.failed == 0 && self.summary.stale == 0
     }
 }
 
@@ -113,25 +115,25 @@ pub fn default_probes() -> Vec<Probe> {
             source: "data.gov.hk AQHI",
             url: aqhi::AQHI_JSON_URL.to_string(),
             schema: Schema::FirstItem("station"),
-            max_age_secs: Some(1_800),
+            max_age_secs: Some(2 * 3_600),
         },
         Probe {
             source: "aqhi.gov.hk RSS",
             url: aqhi::AQHI_RSS_URL.to_string(),
             schema: Schema::Elements(&["item"]),
-            max_age_secs: Some(3_600),
+            max_age_secs: Some(2 * 3_600),
         },
         Probe {
             source: "aqhi.gov.hk 24pc",
             url: pollutants::POLLUTANTS_URL.to_string(),
             schema: Schema::Elements(&["PollutantConcentration"]),
-            max_age_secs: Some(3_600),
+            max_age_secs: Some(2 * 3_600),
         },
         Probe {
             source: "HKO rhrread",
             url: weather::WEATHER_URL.to_string(),
             schema: Schema::Keys(&["temperature", "humidity"]),
-            max_age_secs: Some(1_800),
+            max_age_secs: Some(2 * 3_600),
         },
         Probe {
             source: "HKO fnd",
@@ -191,13 +193,15 @@ pub fn default_probes() -> Vec<Probe> {
             source: "EPD 24-hour AQHI",
             url: aqhi24::AQHI_24H_URL.to_string(),
             schema: Schema::Elements(&["StationName"]),
-            max_age_secs: Some(3_600),
+            max_age_secs: Some(2 * 3_600),
         },
         Probe {
             source: "HKO UV index",
             url: uv::UV_URL.to_string(),
             schema: Schema::Contains("UV Index"),
-            max_age_secs: Some(3_600),
+            // UV is not published overnight, so the newest reading is up to a
+            // day old before the first daylight update.
+            max_age_secs: Some(24 * 3_600),
         },
         Probe {
             source: "HKO radiation",
@@ -218,11 +222,19 @@ pub fn default_probes() -> Vec<Probe> {
 #[must_use]
 pub fn run(probes: &[Probe]) -> Report {
     let checks: Vec<Check> = probes.iter().map(probe).collect();
-    let failed = checks.iter().filter(|check| check.status != "ok").count();
+    let stale = checks
+        .iter()
+        .filter(|check| check.status == "stale")
+        .count();
+    let failed = checks
+        .iter()
+        .filter(|check| check.status != "ok" && check.status != "stale")
+        .count();
     let (entries, bytes) = cache::stats();
     Report {
         summary: Summary {
-            ok: checks.len() - failed,
+            ok: checks.len() - stale - failed,
+            stale,
             failed,
         },
         checks,
