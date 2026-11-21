@@ -13,6 +13,9 @@ pub const AQHI_JSON_URL: &str = "https://dashboard.data.gov.hk/api/aqhi-individu
 /// Per-station AQHI RSS (fallback when the JSON host fails).
 pub const AQHI_RSS_URL: &str = "https://www.aqhi.gov.hk/epd/ddata/html/out/aqhi_ind_rss_Eng.xml";
 
+/// Freshness of a cached AQHI body, in seconds.
+const CACHE_TTL_SECS: u64 = 300;
+
 /// Fetch current AQHI for all 18 stations.
 ///
 /// The JSON endpoint is tried first; on any HTTP or parse failure the RSS feed
@@ -22,11 +25,12 @@ pub const AQHI_RSS_URL: &str = "https://www.aqhi.gov.hk/epd/ddata/html/out/aqhi_
 ///
 /// Returns [`Error::Http`] or [`Error::Parse`] when both sources fail.
 pub fn fetch() -> Result<AqhiReport> {
-    let primary = http::get_text(AQHI_JSON_URL).and_then(|body| parse::parse_aqhi_json(&body));
+    let primary = http::get_cached(AQHI_JSON_URL, CACHE_TTL_SECS)
+        .and_then(|body| parse::parse_aqhi_json(&body));
     let stations = match primary {
         Ok(readings) => readings,
         Err(json_error) => {
-            let body = http::get_text(AQHI_RSS_URL).map_err(|rss_error| {
+            let body = http::get_cached(AQHI_RSS_URL, CACHE_TTL_SECS).map_err(|rss_error| {
                 Error::parse(format!(
                     "AQHI JSON source failed ({json_error}); RSS fallback also failed ({rss_error})"
                 ))

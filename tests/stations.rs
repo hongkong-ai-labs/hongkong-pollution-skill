@@ -1,8 +1,8 @@
 //! Station matching tests: substring, case-insensitive, ambiguous, no match.
 
 use hongkong_pollution_skill::model::{
-    AQHI_STATIONS, EPD_APP_STATIONS, app_category_label, app_station_id, app_station_name,
-    resolve_station,
+    AQHI_STATIONS, EPD_APP_STATIONS, STATION_COORDS, app_category_label, app_station_id,
+    app_station_name, haversine_km, nearest_station, resolve_station,
 };
 
 #[test]
@@ -55,6 +55,51 @@ fn no_match_lists_the_valid_stations() {
 fn empty_query_is_a_usage_error() {
     let error = resolve_station("   ").unwrap_err();
     assert!(error.is_usage());
+}
+
+#[test]
+fn station_coordinates_cover_every_canonical_station() {
+    assert_eq!(STATION_COORDS.len(), AQHI_STATIONS.len());
+    for station in STATION_COORDS {
+        assert!(
+            AQHI_STATIONS.contains(&station.station),
+            "{} is not a canonical station name",
+            station.station
+        );
+        assert!((22.1..=22.6).contains(&station.lat), "{}", station.station);
+        assert!(
+            (113.8..=114.5).contains(&station.lng),
+            "{}",
+            station.station
+        );
+    }
+}
+
+#[test]
+fn nearest_station_resolves_a_known_point() {
+    let (name, distance) = nearest_station(22.3301, 114.1589);
+    assert_eq!(name, "Sham Shui Po");
+    assert!(distance < 0.1, "station point distance: {distance}");
+
+    let (name, distance) = nearest_station(22.3350, 114.1620);
+    assert_eq!(name, "Sham Shui Po");
+    assert!(
+        (0.4..0.9).contains(&distance),
+        "a northbound point should be under a kilometre away, got {distance}"
+    );
+
+    let (name, _) = nearest_station(22.2801, 114.1851);
+    assert_eq!(name, "Causeway Bay");
+}
+
+#[test]
+fn haversine_matches_a_short_known_distance() {
+    let distance = haversine_km(22.3301, 114.1589, 22.3226, 114.1683);
+    assert!(
+        (1.1..1.5).contains(&distance),
+        "Sham Shui Po to Mong Kok should be about 1.3 km, got {distance}"
+    );
+    assert_eq!(haversine_km(22.3301, 114.1589, 22.3301, 114.1589), 0.0);
 }
 
 #[test]

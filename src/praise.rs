@@ -15,6 +15,12 @@ use crate::{now_hkt_iso8601, now_hkt_iso8601_plus_hours};
 /// Street-level pollutant index endpoint.
 pub const POLLUTANT_INDEX_URL: &str = "https://praise-web.ust.hk:8443/api/pollutant_index";
 
+/// Current weather at a coordinate.
+pub const WEATHER_URL: &str = "https://praise-web.ust.hk:8443/api/weather";
+
+/// Freshness of a cached `pollutant_index` body, in seconds.
+const CACHE_TTL_SECS: u64 = 300;
+
 /// Series requested from the endpoint, in the order the plan specifies.
 pub const PIDS: &str =
     "AQHIBN,AQHIER,AQHIPM,AQHIPM10,AQHIPM25,AQHINO2,AQHIO3,AQHISO2,NO2,PM2.5,PM10,O3,SO2";
@@ -49,19 +55,35 @@ const FORECAST_HOURS: i64 = 48;
 pub fn fetch(lat: f64, lng: f64, hours: u32) -> Result<StreetReport> {
     validate_location(lat, lng)?;
     check_hours(hours)?;
+    let url = pollutant_index_url(lat, lng);
+    let body = http::get_cached(&url, CACHE_TTL_SECS)?;
+    let series = parse::parse_praise_json(&body)?;
+    build(series, lat, lng, hours)
+}
+
+/// Full `pollutant_index` URL for a coordinate, over the 48-hour window.
+#[must_use]
+pub fn pollutant_index_url(lat: f64, lng: f64) -> String {
     let t0 = now_hkt_iso8601();
     let t1 = now_hkt_iso8601_plus_hours(FORECAST_HOURS);
-    let url = format!(
+    format!(
         "{POLLUTANT_INDEX_URL}?lat={}&lng={}&pids={}&t0={}&t1={}",
         http::encode_query_value(&lat.to_string()),
         http::encode_query_value(&lng.to_string()),
         http::encode_query_value(PIDS),
         http::encode_query_value(&t0),
         http::encode_query_value(&t1),
-    );
-    let body = http::get_text(&url)?;
-    let series = parse::parse_praise_json(&body)?;
-    build(series, lat, lng, hours)
+    )
+}
+
+/// Full `weather` URL for a coordinate.
+#[must_use]
+pub fn weather_url(lat: f64, lng: f64) -> String {
+    format!(
+        "{WEATHER_URL}?lat={}&lng={}",
+        http::encode_query_value(&lat.to_string()),
+        http::encode_query_value(&lng.to_string()),
+    )
 }
 
 /// Trim a parsed series to the requested window and assemble the report.

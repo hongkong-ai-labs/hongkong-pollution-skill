@@ -1,7 +1,7 @@
 //! Rollup tests: windowing, null skipping, worst/mean selection.
 
 use hongkong_pollution_skill::epd_app::build_history;
-use hongkong_pollution_skill::model::{mean, rollup};
+use hongkong_pollution_skill::model::{at_or_above, mean, rollup};
 use hongkong_pollution_skill::parse::{
     parse_aqhi_json, parse_monitor_detail_json, parse_monitors_json, parse_pollutants_xml,
 };
@@ -113,6 +113,14 @@ fn aqhi_rollup_reports_worst_mean_and_risk_counts() {
     assert_eq!(rolled.risk_counts.get("High"), Some(&2));
     assert_eq!(rolled.risk_counts.get("Low"), Some(&2));
     assert_eq!(rolled.risk_counts.get("Serious"), None);
+}
+
+#[test]
+fn fail_above_thresholds_include_the_boundary() {
+    assert!(at_or_above(Some(8), 8), "N is inclusive");
+    assert!(at_or_above(Some(11), 8));
+    assert!(!at_or_above(Some(7), 8));
+    assert!(!at_or_above(None, 1), "no reading cannot reach a threshold");
 }
 
 #[test]

@@ -4,37 +4,50 @@ use std::process::exit;
 
 use hongkong_pollution_skill::model::{
     AqhiReport, Averages, ForecastRange, ForecastReport, HistoryReading, HistoryReport,
-    PollutantsReport, StreetReport, SummaryReport, WeatherReport, mean, resolve_station,
+    PollutantsReport, StreetReport, SummaryReport, WeatherReport, at_or_above, mean,
+    nearest_station, resolve_station, rollup,
 };
 use hongkong_pollution_skill::{
-    Error, Result, VERSION, aqhi, epd_app, mcp, pollutants, praise, weather,
+    Error, Result, VERSION, aqhi, doctor, epd_app, http, mcp, pollutants, praise, weather,
 };
+
+/// Highest AQHI value accepted by `--fail-above`.
+const MAX_AQHI: i64 = 11;
 
 const USAGE: &str = "\
 hkpollution - Hong Kong air pollution data (EPD AQHI + HKO weather)
 
 USAGE:
-    hkpollution aqhi       [--station <name>] [--json]
+    hkpollution aqhi       [--station <name> | --near <lat>,<lng>] [--fail-above <N>] [--json]
     hkpollution pollutants [--station <name>] [--hours <1-24>] [--json]
     hkpollution forecast   [--json]
-    hkpollution history    [--station <name>] [--hours <1-23>] [--json]
+    hkpollution history    [--station <name> | --near <lat>,<lng>] [--hours <1-23>] [--json]
     hkpollution street     --lat <22.x> --lng <114.x> [--hours <1-48>] [--json]
-    hkpollution summary    [--json] [--with-weather]
+    hkpollution summary    [--station <name> | --near <lat>,<lng>] [--fail-above <N>]
+                           [--json] [--with-weather]
     hkpollution weather    [--json]
+    hkpollution doctor     [--json]
     hkpollution mcp
     hkpollution --help | --version
 
 OPTIONS:
     --station <name>   case-insensitive station substring; ambiguous names return all matches
+    --near <lat>,<lng> nearest station to a Hong Kong coordinate (22.1-22.6, 113.8-114.5);
+                       cannot be combined with --station
     --lat <deg>        street-level latitude in Hong Kong (22.1-22.6), with --lng
     --lng <deg>        street-level longitude in Hong Kong (113.8-114.5), with --lat
     --hours <N>        hourly rows kept: 1-24 for `pollutants`, 1-23 for `history`,
                        1-48 for `street` (default 1, 24 for `street`)
+    --fail-above <N>   exit 3 when the worst AQHI in the output is N or above (1-11)
     --json             print one JSON object to stdout and nothing else
     --with-weather     add HKO temperature, humidity and warnings to the summary
+    --no-cache         bypass the on-disk TTL cache for this run
+    --max-age <secs>   override this run's cache TTL; 0 refetches and rewrites
+    --refresh          alias for --max-age 0
 
 EXIT CODES:
-    0 success, 1 network/upstream/io failure, 2 usage error";
+    0 success, 1 network/upstream/io failure or a failing doctor check,
+    2 usage error, 3 --fail-above threshold reached";
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -80,6 +93,7 @@ fn run(args: &[String]) -> Result<()> {
         "street" => command_street(&args[1..]),
         "summary" => command_summary(&args[1..]),
         "weather" => command_weather(&args[1..]),
+        "doctor" => command_doctor(&args[1..]),
         other => Err(Error::usage(format!("unknown command: {other}"))),
     }
 }
@@ -93,6 +107,7 @@ enum Command {
     Street,
     Summary,
     Weather,
+    Doctor,
 }
 
 impl Command {
@@ -105,11 +120,27 @@ impl Command {
             Self::Street => "street",
             Self::Summary => "summary",
             Self::Weather => "weather",
+            Self::Doctor => "doctor",
         }
     }
 
     fn allows_station(self) -> bool {
-        matches!(self, Self::Aqhi | Self::Pollutants | Self::History)
+        matches!(
+            self,
+            Self::Aqhi | Self::Pollutants | Self::History | Self::Summary
+        )
+    }
+
+    fn allows_near(self) -> bool {
+        matches!(self, Self::Aqhi | Self::History | Self::Summary)
+    }
+
+    fn allows_fail_above(self) -> bool {
+        matches!(self, Self::Aqhi | Self::History | Self::Summary)
+    }
+
+    fn allows_cache(self) -> bool {
+        !matches!(self, Self::Doctor)
     }
 
     fn max_hours(self) -> Option<u32> {
@@ -135,10 +166,14 @@ struct Options {
     json: bool,
     with_weather: bool,
     help: bool,
+    no_cache: bool,
     station: Option<String>,
+    near: Option<(f64, f64)>,
     hours: Option<u32>,
     lat: Option<f64>,
     lng: Option<f64>,
+    max_age: Option<u64>,
+    fail_above: Option<i64>,
 }
 
 fn parse_options(args: &[String], command: Command) -> Result<Options> {
@@ -164,7 +199,7 @@ fn parse_options(args: &[String], command: Command) -> Result<Options> {
         } else if arg == "--station" || arg.starts_with("--station=") {
             if !command.allows_station() {
                 return Err(Error::usage(format!(
-                    "--station is only valid for `aqhi`, `pollutants` and `history`, not `{}`",
+                    "--station is only valid for `aqhi`, `pollutants`, `history` and `summary`, not `{}`",
                     command.name()
                 )));
             }
@@ -185,6 +220,60 @@ fn parse_options(args: &[String], command: Command) -> Result<Options> {
                 return Err(Error::usage("--station requires a non-empty station name"));
             }
             options.station = Some(value);
+        } else if arg == "--near" || arg.starts_with("--near=") {
+            if !command.allows_near() {
+                return Err(Error::usage(format!(
+                    "--near is only valid for `aqhi`, `history` and `summary`, not `{}`",
+                    command.name()
+                )));
+            }
+            let value = match arg.strip_prefix("--near=") {
+                Some(inline) => {
+                    index += 1;
+                    inline.to_string()
+                }
+                None => {
+                    let value = args
+                        .get(index + 1)
+                        .ok_or_else(|| Error::usage("--near requires <lat>,<lng>"))?;
+                    index += 2;
+                    value.clone()
+                }
+            };
+            options.near = Some(parse_near(&value)?);
+        } else if arg == "--fail-above" || arg.starts_with("--fail-above=") {
+            if !command.allows_fail_above() {
+                return Err(Error::usage(format!(
+                    "--fail-above is only valid for `aqhi`, `history` and `summary`, not `{}`",
+                    command.name()
+                )));
+            }
+            let value = match arg.strip_prefix("--fail-above=") {
+                Some(inline) => {
+                    index += 1;
+                    inline.to_string()
+                }
+                None => {
+                    let value = args.get(index + 1).ok_or_else(|| {
+                        Error::usage(format!(
+                            "--fail-above requires a whole number between 1 and {MAX_AQHI}"
+                        ))
+                    })?;
+                    index += 2;
+                    value.clone()
+                }
+            };
+            let threshold: i64 = value.trim().parse().map_err(|_| {
+                Error::usage(format!(
+                    "--fail-above must be a whole number between 1 and {MAX_AQHI}, got {value:?}"
+                ))
+            })?;
+            if !(1..=MAX_AQHI).contains(&threshold) {
+                return Err(Error::usage(format!(
+                    "--fail-above must be between 1 and {MAX_AQHI}"
+                )));
+            }
+            options.fail_above = Some(threshold);
         } else if arg == "--hours" || arg.starts_with("--hours=") {
             let Some(max_hours) = command.max_hours() else {
                 return Err(Error::usage(format!(
@@ -268,6 +357,50 @@ fn parse_options(args: &[String], command: Command) -> Result<Options> {
                 .parse()
                 .map_err(|_| Error::usage(format!("--lng must be a number, got {value:?}")))?;
             options.lng = Some(lng);
+        } else if arg == "--no-cache" {
+            if !command.allows_cache() {
+                return Err(Error::usage(format!(
+                    "--no-cache is only valid for network commands, not `{}`",
+                    command.name()
+                )));
+            }
+            options.no_cache = true;
+            index += 1;
+        } else if arg == "--refresh" {
+            if !command.allows_cache() {
+                return Err(Error::usage(format!(
+                    "--refresh is only valid for network commands, not `{}`",
+                    command.name()
+                )));
+            }
+            options.max_age = Some(0);
+            index += 1;
+        } else if arg == "--max-age" || arg.starts_with("--max-age=") {
+            if !command.allows_cache() {
+                return Err(Error::usage(format!(
+                    "--max-age is only valid for network commands, not `{}`",
+                    command.name()
+                )));
+            }
+            let value = match arg.strip_prefix("--max-age=") {
+                Some(inline) => {
+                    index += 1;
+                    inline.to_string()
+                }
+                None => {
+                    let value = args
+                        .get(index + 1)
+                        .ok_or_else(|| Error::usage("--max-age requires a number of seconds"))?;
+                    index += 2;
+                    value.clone()
+                }
+            };
+            let seconds: u64 = value.trim().parse().map_err(|_| {
+                Error::usage(format!(
+                    "--max-age must be a non-negative number of seconds, got {value:?}"
+                ))
+            })?;
+            options.max_age = Some(seconds);
         } else {
             return Err(Error::usage(format!(
                 "unknown argument for `{}`: {arg}",
@@ -275,7 +408,56 @@ fn parse_options(args: &[String], command: Command) -> Result<Options> {
             )));
         }
     }
+    if options.near.is_some() && options.station.is_some() {
+        return Err(Error::usage(
+            "--near and --station cannot be combined; pick one",
+        ));
+    }
     Ok(options)
+}
+
+/// Parse `--near <lat>,<lng>` and enforce the Hong Kong bounds used by `street`.
+fn parse_near(value: &str) -> Result<(f64, f64)> {
+    let (lat, lng) = value
+        .split_once(',')
+        .ok_or_else(|| Error::usage(format!("--near requires <lat>,<lng>, got {value:?}")))?;
+    let lat: f64 = lat
+        .trim()
+        .parse()
+        .map_err(|_| Error::usage(format!("--near latitude must be a number, got {lat:?}")))?;
+    let lng: f64 = lng
+        .trim()
+        .parse()
+        .map_err(|_| Error::usage(format!("--near longitude must be a number, got {lng:?}")))?;
+    if !lat.is_finite() || !(praise::LAT_RANGE.0..=praise::LAT_RANGE.1).contains(&lat) {
+        return Err(Error::usage(format!(
+            "--near latitude must be between {} and {} (Hong Kong bounds), got {lat}",
+            praise::LAT_RANGE.0,
+            praise::LAT_RANGE.1
+        )));
+    }
+    if !lng.is_finite() || !(praise::LNG_RANGE.0..=praise::LNG_RANGE.1).contains(&lng) {
+        return Err(Error::usage(format!(
+            "--near longitude must be between {} and {} (Hong Kong bounds), got {lng}",
+            praise::LNG_RANGE.0,
+            praise::LNG_RANGE.1
+        )));
+    }
+    Ok((lat, lng))
+}
+
+/// Apply the cache flags for this run before any source is contacted.
+fn apply_cache(options: &Options) {
+    http::configure_cache(options.no_cache, options.max_age);
+}
+
+/// Exit 3 after the normal output when `--fail-above` is reached.
+fn threshold_exit(fail_above: Option<i64>, worst_aqhi: Option<i64>) {
+    if let Some(threshold) = fail_above {
+        if at_or_above(worst_aqhi, threshold) {
+            exit(3);
+        }
+    }
 }
 
 fn command_aqhi(args: &[String]) -> Result<()> {
@@ -284,17 +466,27 @@ fn command_aqhi(args: &[String]) -> Result<()> {
         println!("{USAGE}");
         return Ok(());
     }
+    apply_cache(&options);
+    let near = options.near.map(|(lat, lng)| nearest_station(lat, lng));
     let mut report = aqhi::fetch()?;
-    if let Some(query) = &options.station {
+    if let Some((station, _)) = near {
+        aqhi::retain_stations(&mut report.stations, &[station.to_string()]);
+    } else if let Some(query) = &options.station {
         let names = resolve_station(query)?;
         aqhi::retain_stations(&mut report.stations, &names);
     }
+    let worst = report
+        .stations
+        .iter()
+        .filter_map(|reading| reading.aqhi)
+        .max();
     if options.json {
-        print_json(&report)
+        print_json(&report)?;
     } else {
-        print_aqhi(&report);
-        Ok(())
+        print_aqhi(&report, near);
     }
+    threshold_exit(options.fail_above, worst);
+    Ok(())
 }
 
 fn command_pollutants(args: &[String]) -> Result<()> {
@@ -303,6 +495,7 @@ fn command_pollutants(args: &[String]) -> Result<()> {
         println!("{USAGE}");
         return Ok(());
     }
+    apply_cache(&options);
     let mut report = pollutants::fetch(options.hours.unwrap_or(1))?;
     if let Some(query) = &options.station {
         let names = resolve_station(query)?;
@@ -322,6 +515,7 @@ fn command_forecast(args: &[String]) -> Result<()> {
         println!("{USAGE}");
         return Ok(());
     }
+    apply_cache(&options);
     let report = epd_app::fetch_forecast()?;
     if options.json {
         print_json(&report)
@@ -337,13 +531,26 @@ fn command_history(args: &[String]) -> Result<()> {
         println!("{USAGE}");
         return Ok(());
     }
-    let report = epd_app::fetch_history(options.station.as_deref(), options.hours.unwrap_or(1))?;
+    apply_cache(&options);
+    let near = options.near.map(|(lat, lng)| nearest_station(lat, lng));
+    let query = match near {
+        Some((station, _)) => Some(station.to_string()),
+        None => options.station.clone(),
+    };
+    let report = epd_app::fetch_history(query.as_deref(), options.hours.unwrap_or(1))?;
+    let worst = report
+        .stations
+        .iter()
+        .flat_map(|station| station.series.iter())
+        .filter_map(|reading| reading.aqhi)
+        .max();
     if options.json {
-        print_json(&report)
+        print_json(&report)?;
     } else {
-        print_history(&report);
-        Ok(())
+        print_history(&report, near);
     }
+    threshold_exit(options.fail_above, worst);
+    Ok(())
 }
 
 fn command_street(args: &[String]) -> Result<()> {
@@ -355,6 +562,7 @@ fn command_street(args: &[String]) -> Result<()> {
     let (Some(lat), Some(lng)) = (options.lat, options.lng) else {
         return Err(Error::usage("`street` requires --lat and --lng together"));
     };
+    apply_cache(&options);
     let report = praise::fetch(lat, lng, options.hours.unwrap_or(praise::DEFAULT_HOURS))?;
     if options.json {
         print_json(&report)
@@ -370,13 +578,37 @@ fn command_summary(args: &[String]) -> Result<()> {
         println!("{USAGE}");
         return Ok(());
     }
-    let report = aqhi::summary(options.with_weather)?;
+    apply_cache(&options);
+    let near = options.near.map(|(lat, lng)| nearest_station(lat, lng));
+    let names = match (near, &options.station) {
+        (Some((station, _)), _) => Some(vec![station.to_string()]),
+        (None, Some(query)) => Some(resolve_station(query)?),
+        (None, None) => None,
+    };
+    let mut report = aqhi::summary(options.with_weather)?;
+    if let Some(names) = &names {
+        report.stations.retain(|reading| {
+            names
+                .iter()
+                .any(|name| name.eq_ignore_ascii_case(&reading.station))
+        });
+        let rolled = rollup(&report.stations);
+        report.worst = rolled.worst;
+        report.mean_aqhi = rolled.mean_aqhi;
+        report.risk_counts = rolled.risk_counts;
+    }
+    let worst = report
+        .stations
+        .iter()
+        .filter_map(|reading| reading.aqhi)
+        .max();
     if options.json {
-        print_json(&report)
+        print_json(&report)?;
     } else {
         print_summary(&report);
-        Ok(())
     }
+    threshold_exit(options.fail_above, worst);
+    Ok(())
 }
 
 fn command_weather(args: &[String]) -> Result<()> {
@@ -385,6 +617,7 @@ fn command_weather(args: &[String]) -> Result<()> {
         println!("{USAGE}");
         return Ok(());
     }
+    apply_cache(&options);
     let report = weather::fetch()?;
     if options.json {
         print_json(&report)
@@ -394,13 +627,31 @@ fn command_weather(args: &[String]) -> Result<()> {
     }
 }
 
+fn command_doctor(args: &[String]) -> Result<()> {
+    let options = parse_options(args, Command::Doctor)?;
+    if options.help {
+        println!("{USAGE}");
+        return Ok(());
+    }
+    let report = doctor::run(&doctor::default_probes());
+    if options.json {
+        print_json(&report)?;
+    } else {
+        print_doctor(&report);
+    }
+    if !report.healthy() {
+        exit(1);
+    }
+    Ok(())
+}
+
 fn print_json<T: serde::Serialize>(value: &T) -> Result<()> {
     let encoded = serde_json::to_string(value)?;
     println!("{encoded}");
     Ok(())
 }
 
-fn print_aqhi(report: &AqhiReport) {
+fn print_aqhi(report: &AqhiReport, near: Option<(&str, f64)>) {
     let rows: Vec<Vec<String>> = report
         .stations
         .iter()
@@ -421,6 +672,7 @@ fn print_aqhi(report: &AqhiReport) {
         .collect();
     print_table(&["Station", "AQHI", "Risk", "Published"], &rows);
     println!();
+    print_near(near);
     println!(
         "source: EPD Air Quality Health Index (fetched {})",
         report.fetched_at
@@ -504,7 +756,7 @@ fn format_range(range: Option<ForecastRange>) -> String {
     )
 }
 
-fn print_history(report: &HistoryReport) {
+fn print_history(report: &HistoryReport, near: Option<(&str, f64)>) {
     let mut rows: Vec<Vec<String>> = Vec::new();
     for station in &report.stations {
         let shown = &station.series[..(report.hours as usize).min(station.series.len())];
@@ -538,6 +790,7 @@ fn print_history(report: &HistoryReport) {
         &rows,
     );
     println!();
+    print_near(near);
     println!(
         "source: EPD app API (fetched {}) — EPD data © Government of the HKSAR",
         report.fetched_at
@@ -701,6 +954,42 @@ fn print_weather(report: &WeatherReport) {
     }
     println!();
     println!("source: HKO current readings");
+}
+
+fn print_doctor(report: &doctor::Report) {
+    let rows: Vec<Vec<String>> = report
+        .checks
+        .iter()
+        .map(|check| {
+            vec![
+                check.source.clone(),
+                check.status.clone(),
+                check.ms.to_string(),
+                check.detail.clone(),
+            ]
+        })
+        .collect();
+    print_table(&["SOURCE", "STATUS", "MS", "DETAIL"], &rows);
+    println!();
+    println!("version: {}", report.version);
+    match &report.cache.dir {
+        Some(dir) => println!("cache: {dir}"),
+        None => println!("cache: unavailable"),
+    };
+    println!(
+        "cache entries: {} ({} bytes)",
+        report.cache.entries, report.cache.bytes
+    );
+    println!(
+        "summary: {} ok, {} failed",
+        report.summary.ok, report.summary.failed
+    );
+}
+
+fn print_near(near: Option<(&str, f64)>) {
+    if let Some((station, distance)) = near {
+        println!("station: {station} ({distance:.1} km away)");
+    }
 }
 
 fn print_table(headers: &[&str], rows: &[Vec<String>]) {
