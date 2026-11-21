@@ -13,7 +13,7 @@ use crate::error::{Error, Result};
 use crate::model::resolve_station;
 use crate::{
     VERSION, aqhi, brief, digest, doctor, epd_app, http, pollutants, praise, radiation, recycling,
-    redtide, stats, uv, watch, water, weather,
+    redtide, seatemp, stats, tide, uv, watch, water, weather,
 };
 
 /// Newest MCP protocol revision this server implements.
@@ -480,6 +480,42 @@ fn tools_list() -> Value {
                 }
             },
             {
+                "name": "tide",
+                "description": "HKO tide information: latest observed height per station and, \
+                                for one station, that day's predicted high and low tides.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "station": {
+                            "type": "string",
+                            "description": "Station name or HKO code, e.g. \"Quarry Bay\" or \"QUB\"."
+                        },
+                        "date": {
+                            "type": "string",
+                            "description": "Prediction date, YYYY-MM-DD (default today)."
+                        }
+                    },
+                    "additionalProperties": false
+                }
+            },
+            {
+                "name": "sea_temperature",
+                "description": "HKO daily mean sea temperature at Waglan Island: latest \
+                                reading plus mean, minimum and maximum over a window.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "days": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 365,
+                            "description": "Averaging window in days (default 14)."
+                        }
+                    },
+                    "additionalProperties": false
+                }
+            },
+            {
                 "name": "environment_alerts",
                 "description": "One alert evaluation across live sources: worst AQHI against a \
                                 threshold, active red tides and radiation stations above twice \
@@ -572,6 +608,8 @@ fn call_tool(id: Option<Value>, params: Option<&Value>) -> Value {
         "station_comparison" => tool_compare(),
         "environment_digest" => serde_json::to_value(digest::build()).map_err(Error::from),
         "recycling" => tool_recycling(&arguments),
+        "tide" => tool_tide(&arguments),
+        "sea_temperature" => tool_sea_temp(&arguments),
         "environment_alerts" => tool_alerts(&arguments),
         "source_health" => tool_source_health(),
         other => {
@@ -794,6 +832,23 @@ fn tool_recycling(arguments: &Value) -> Result<Value> {
     Ok(serde_json::to_value(recycling::near(
         lat, lng, limit, waste,
     )?)?)
+}
+
+fn tool_tide(arguments: &Value) -> Result<Value> {
+    let station = arguments.get("station").and_then(Value::as_str);
+    let date = arguments.get("date").and_then(Value::as_str);
+    Ok(serde_json::to_value(tide::fetch(station, date)?)?)
+}
+
+fn tool_sea_temp(arguments: &Value) -> Result<Value> {
+    let days = match arguments.get("days") {
+        None | Some(Value::Null) => seatemp::DEFAULT_DAYS,
+        Some(value) => value
+            .as_u64()
+            .and_then(|raw| u32::try_from(raw).ok())
+            .ok_or_else(|| Error::usage("days must be an integer between 1 and 365"))?,
+    };
+    Ok(serde_json::to_value(seatemp::fetch(days)?)?)
 }
 
 fn tool_alerts(arguments: &Value) -> Result<Value> {

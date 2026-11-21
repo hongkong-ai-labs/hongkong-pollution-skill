@@ -81,6 +81,8 @@ It checks, in order: `$HKPOLLUTION_BIN`, `hkpollution` on `PATH`,
 | `hkpollution stats [--days 1-365] [--station TEXT] [--threshold 1-11] [--json]` | AQHI statistics over time |
 | `hkpollution compare [--json]` | Current AQHI ranked, general vs roadside |
 | `hkpollution digest [--json]` | One line per source |
+| `hkpollution tide [--station NAME\|CODE] [--date YYYY-MM-DD] [--json]` | Latest observed heights and predicted high/low tides |
+| `hkpollution sea-temp [--days 1-365] [--json]` | Daily mean sea temperature at Waglan Island |
 | `hkpollution recycling --lat L --lng L [--limit 1-50] [--type TEXT] [--json]` | Nearest recyclable collection points |
 | `hkpollution watch [--interval S] [--aqhi N] [--red-tide] [--radiation] [--once] [--json]` | Alert loop across live sources |
 | `hkpollution advice [--risk BAND] [--lang en\|tc\|both] [--json]` | Official EPD precautionary actions per AQHI band |
@@ -110,6 +112,13 @@ Grade bands follow the EPD
 measured on the geometric mean E. coli count of the five most recent sampling
 occasions: Good ≤ 24, Fair 25-180, Poor 181-610, Very Poor > 610 (or a last
 reading above 1,600).
+
+`tide` with no `--station` reports only the stations currently reporting, so
+an empty row set means the feed is down rather than a dead station. Name a
+station (or its HKO code, for example `QUB`) to add that day's predicted high
+and low tides; closed stations (Chi Ma Wan, Lok On Pai) are omitted. The
+sea-temperature file is published with a lag, so quote `latest.date` rather
+than calling the value today's.
 
 `beach --history N` adds `ecoli_history`: the geometric mean and maximum for
 each of the N previous published years, so "is this beach cleaner than last
@@ -196,6 +205,8 @@ protocol revision `2024-11-05`) and exposes these tools:
 | `station_comparison` | `{}` |
 | `environment_digest` | `{}` |
 | `recycling` | `{ "lat": number, "lng": number, "limit"?: 1-50, "type"?: string }` |
+| `tide` | `{ "station"?: string, "date"?: "YYYY-MM-DD" }` |
+| `sea_temperature` | `{ "days"?: 1-365 }` |
 | `environment_alerts` | `{ "aqhi"?: 1-11, "red_tide"?: boolean, "radiation"?: boolean }` |
 | `air_quality_briefing` | `{ "lat": number, "lng": number, "no_cache"?: boolean }` |
 | `health_advice` | `{ "risk"?: string, "lang"?: "en"\|"tc"\|"both" }` |
@@ -255,6 +266,9 @@ Errors always go to stderr; stdout stays clean for `--json`.
   log starts at first use, so say how much coverage exists.
 - "Where do I recycle glass near here?" → `recycling --lat <x> --lng <y>
   --type glass`; quote the distance, accepted types and opening hours.
+- "What time is high tide / can I swim now?" → `tide --station "Quarry Bay"`;
+  pair the predicted high/low with `beach` if the question is about swimming.
+- "Is the sea warm?" → `sea-temp`; quote the reading date, which can lag today.
 - "Tell me when the air gets bad" → `watch --aqhi 7 --once` exits 3 on a breach
   for cron; omit `--once` to poll every `--interval` seconds. Add `--red-tide`
   and `--radiation` to include those sources.

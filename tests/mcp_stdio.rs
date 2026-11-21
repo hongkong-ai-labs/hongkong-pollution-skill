@@ -139,10 +139,12 @@ fn mcp_answers_initialize_tools_list_ping_and_unknown_methods() {
             "radiation_level",
             "recycling",
             "red_tide",
+            "sea_temperature",
             "source_health",
             "station_comparison",
             "station_history",
             "street_level_aqhi",
+            "tide",
             "uv_index",
             "water_quality"
         ]
