@@ -72,7 +72,7 @@ It checks, in order: `$HKPOLLUTION_BIN`, `hkpollution` on `PATH`,
 | `hkpollution street --lat L --lng L [--hours 1-48] [--json]` | PRAISE-HK street-level AQHI, %AR and pollutants |
 | `hkpollution summary [--with-weather] [--json]` | Network rollup, optional HKO weather |
 | `hkpollution weather [--forecast] [--json]` | HKO temperature, humidity and warnings, plus the nine-day forecast |
-| `hkpollution beach [--name TEXT] [--district TEXT] [--grade BAND] [--near LAT,LNG] [--json]` | EPD beach grading plus E. coli history |
+| `hkpollution beach [--name TEXT] [--district TEXT] [--grade BAND] [--near LAT,LNG] [--history 0-10] [--json]` | EPD beach grading plus E. coli history |
 | `hkpollution river [--zone TEXT] [--station TEXT] [--months 1-60] [--json]` | EPD monthly river water quality |
 | `hkpollution marine [--zone TEXT] [--station TEXT] [--months 1-60] [--json]` | EPD monthly marine water quality |
 | `hkpollution red-tide [--days 1-3650] [--active] [--near LAT,LNG] [--json]` | AFCD red tide sightings |
@@ -81,6 +81,8 @@ It checks, in order: `$HKPOLLUTION_BIN`, `hkpollution` on `PATH`,
 | `hkpollution stats [--days 1-365] [--station TEXT] [--threshold 1-11] [--json]` | AQHI statistics over time |
 | `hkpollution compare [--json]` | Current AQHI ranked, general vs roadside |
 | `hkpollution digest [--json]` | One line per source |
+| `hkpollution recycling --lat L --lng L [--limit 1-50] [--type TEXT] [--json]` | Nearest recyclable collection points |
+| `hkpollution watch [--interval S] [--aqhi N] [--red-tide] [--radiation] [--once] [--json]` | Alert loop across live sources |
 | `hkpollution advice [--risk BAND] [--lang en\|tc\|both] [--json]` | Official EPD precautionary actions per AQHI band |
 | `hkpollution brief --lat L --lng L [--json]` | Place name, street AQHI, nearest station, weather and advice in one call |
 | `hkpollution map --bbox lat0,lng0,lat1,lng1 [--json]` | PRAISE-HK raster tile link for a bounding box |
@@ -108,6 +110,11 @@ Grade bands follow the EPD
 measured on the geometric mean E. coli count of the five most recent sampling
 occasions: Good ≤ 24, Fair 25-180, Poor 181-610, Very Poor > 610 (or a last
 reading above 1,600).
+
+`beach --history N` adds `ecoli_history`: the geometric mean and maximum for
+each of the N previous published years, so "is this beach cleaner than last
+year" is answerable without another dataset. Each year costs one cached CSV
+request (maximum 10).
 
 `ecoli` is joined from EPD's yearly monitoring CSV, which is published only
 after a year ends, so it can be months older than the grade. `ecoli_source`
@@ -188,6 +195,8 @@ protocol revision `2024-11-05`) and exposes these tools:
 | `air_quality_stats` | `{ "days"?: 1-365, "station"?: string, "threshold"?: 1-11 }` |
 | `station_comparison` | `{}` |
 | `environment_digest` | `{}` |
+| `recycling` | `{ "lat": number, "lng": number, "limit"?: 1-50, "type"?: string }` |
+| `environment_alerts` | `{ "aqhi"?: 1-11, "red_tide"?: boolean, "radiation"?: boolean }` |
 | `air_quality_briefing` | `{ "lat": number, "lng": number, "no_cache"?: boolean }` |
 | `health_advice` | `{ "risk"?: string, "lang"?: "en"\|"tc"\|"both" }` |
 | `source_health` | `{}` |
@@ -244,6 +253,11 @@ Errors always go to stderr; stdout stays clean for `--json`.
   median rather than a health limit.
 - "Has the air been bad this month?" → `stats --days 30 --station X`; the local
   log starts at first use, so say how much coverage exists.
+- "Where do I recycle glass near here?" → `recycling --lat <x> --lng <y>
+  --type glass`; quote the distance, accepted types and opening hours.
+- "Tell me when the air gets bad" → `watch --aqhi 7 --once` exits 3 on a breach
+  for cron; omit `--once` to poll every `--interval` seconds. Add `--red-tide`
+  and `--radiation` to include those sources.
 - Monitoring: `aqhi --fail-above 7` exits 3, so a cron job can act on it directly.
 - Something looks broken → `doctor`, which probes every source and reports latency.
 
@@ -269,3 +283,27 @@ The Rust source ships with the skill, so `scripts/ensure-binary.sh` can run
 `HKPOLLUTION_REPO`, `HKPOLLUTION_VERSION` and `HKPOLLUTION_BIN_DIR`.
 
 MIT licensed.
+
+### Install the binary directly
+
+`npx skills add` installs the skill files. If the binary is missing, install it
+with the release installer or cargo:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/hongkong-ai-labs/hongkong-pollution-skill/main/scripts/install.sh | sh
+# or
+cargo install --git https://github.com/hongkong-ai-labs/hongkong-pollution-skill --locked
+```
+
+Register it with any MCP client:
+
+```bash
+npx add-mcp "$(command -v hkpollution) mcp" --name hongkong-pollution -a claude-code -a codex -a cursor -y
+claude mcp add hongkong-pollution -- hkpollution mcp
+codex mcp add hongkong-pollution -- hkpollution mcp
+```
+
+`add-mcp` detects the client configuration files in the current project; add
+`-g` for a global install. `$(command -v hkpollution)` keeps the entry correct
+when the binary is on `PATH`; substitute an absolute path if your client does
+not inherit the shell `PATH`.

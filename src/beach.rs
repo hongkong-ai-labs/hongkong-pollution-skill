@@ -109,6 +109,19 @@ pub struct EcoliSummary {
     pub recent: Vec<EcoliSample>,
 }
 
+/// E. coli figures for one published monitoring year.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct YearEcoli {
+    /// Monitoring year, `YYYY`.
+    pub year: String,
+    /// Samples in that year's file for this beach.
+    pub samples: usize,
+    /// Geometric mean over the whole year, the annual ranking basis.
+    pub geometric_mean_per_100ml: Option<f64>,
+    /// Highest single count in the year.
+    pub max_per_100ml: Option<u32>,
+}
+
 /// One beach and its latest published grading.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Beach {
@@ -134,6 +147,8 @@ pub struct Beach {
     pub distance_km: Option<f64>,
     /// E. coli history, when the yearly monitoring file covers this beach.
     pub ecoli: Option<EcoliSummary>,
+    /// Earlier published years, newest first; empty unless `--history` was used.
+    pub ecoli_history: Vec<YearEcoli>,
 }
 
 impl Beach {
@@ -224,6 +239,80 @@ pub fn fetch() -> Result<BeachReport> {
     Ok(report)
 }
 
+/// Fetch the grading feed and add the previous `years` published E. coli years.
+///
+/// Each extra year costs one cached CSV request, so `years` is capped at 10.
+///
+/// # Errors
+///
+/// Propagates the same errors as [`fetch`], plus [`Error::Usage`] when `years`
+/// exceeds 10.
+pub fn fetch_with_history(years: u32) -> Result<BeachReport> {
+    if years > 10 {
+        return Err(Error::usage("--history must be between 0 and 10"));
+    }
+    let mut report = fetch()?;
+    if years == 0 {
+        return Ok(report);
+    }
+    let Some(latest) = report
+        .ecoli_source
+        .as_deref()
+        .and_then(|url| url.rsplit('/').next())
+        .and_then(|file| file.strip_prefix("beach-historical-data-"))
+        .and_then(|rest| rest.get(0..4))
+        .and_then(|year| year.parse::<u32>().ok())
+    else {
+        return Ok(report);
+    };
+    for offset in 1..=years {
+        let Some(year) = latest.checked_sub(offset) else {
+            break;
+        };
+        let Ok((_, history)) = read_ecoli_year(year) else {
+            continue;
+        };
+        for beach in &mut report.beaches {
+            if let Some(samples) = history.get(&normalise_name(&beach.name)) {
+                beach.ecoli_history.push(year_summary(year, samples));
+            }
+        }
+    }
+    Ok(report)
+}
+
+fn read_ecoli_year(year: u32) -> Result<(String, BTreeMap<String, Vec<EcoliSample>>)> {
+    let url = ecoli_url(u16::try_from(year).unwrap_or(u16::MAX));
+    let body = http::get_cached(&url, ECOLI_CACHE_TTL_SECS)?;
+    let history = parse_ecoli_csv(&body)?;
+    if history.is_empty() {
+        return Err(Error::parse(format!("{url} has no sampling rows")));
+    }
+    Ok((url, history))
+}
+
+fn year_summary(year: u32, samples: &[EcoliSample]) -> YearEcoli {
+    let values: Vec<f64> = samples
+        .iter()
+        .filter(|sample| sample.per_100ml > 0)
+        .map(|sample| f64::from(sample.per_100ml))
+        .collect();
+    let geometric_mean = if values.is_empty() {
+        None
+    } else {
+        #[allow(clippy::cast_precision_loss)]
+        let count = values.len() as f64;
+        let mean_ln = values.iter().map(|value| value.ln()).sum::<f64>() / count;
+        Some((mean_ln.exp() * 10.0).round() / 10.0)
+    };
+    YearEcoli {
+        year: year.to_string(),
+        samples: samples.len(),
+        geometric_mean_per_100ml: geometric_mean,
+        max_per_100ml: samples.iter().map(|sample| sample.per_100ml).max(),
+    }
+}
+
 /// Parse the grading GeoJSON without any E. coli join.
 fn parse_grading(body: &str) -> Result<BeachReport> {
     let collection: FeatureCollection =
@@ -255,6 +344,7 @@ fn parse_grading(body: &str) -> Result<BeachReport> {
                 longitude,
                 distance_km: None,
                 ecoli: None,
+                ecoli_history: Vec::new(),
             }
         })
         .collect();
@@ -552,6 +642,29 @@ mod tests {
             grade_name(&graded.description, &graded.status, &graded.description),
             "Grade 1 - Good"
         );
+    }
+
+    #[test]
+    fn summarises_a_whole_year() {
+        let samples = vec![
+            EcoliSample {
+                sampled_on: "2024-06-01".into(),
+                per_100ml: 10,
+            },
+            EcoliSample {
+                sampled_on: "2024-06-08".into(),
+                per_100ml: 90,
+            },
+            EcoliSample {
+                sampled_on: "2024-06-15".into(),
+                per_100ml: 0,
+            },
+        ];
+        let summary = year_summary(2024, &samples);
+        assert_eq!(summary.year, "2024");
+        assert_eq!(summary.samples, 3);
+        assert_eq!(summary.max_per_100ml, Some(90));
+        assert_eq!(summary.geometric_mean_per_100ml, Some(30.0));
     }
 
     #[test]

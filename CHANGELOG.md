@@ -8,6 +8,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `recycling --lat --lng`: the nearest of EPD's 9,700 recyclable collection
+  points, with accepted waste types, opening hours, distance and a `--type`
+  filter (for example `--type glass`).
+- `watch`: evaluates AQHI (`--aqhi`, default 7), active red tides (`--red-tide`)
+  and radiation above twice the network median (`--radiation`) once per
+  `--interval`; `--once` exits 3 on an alert for cron and `--json` emits one
+  object per check.
+- `beach --history N` adds `ecoli_history`: the geometric mean and maximum for
+  each of the N previous published monitoring years, so a beach can be compared
+  with its own past.
 - `river` and `marine`: EPD monthly water quality (dissolved oxygen and BOD5)
   per station, with `--zone`, `--station`, `--months` and the sampling month
   named in every report so it is never read as live data.
