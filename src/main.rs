@@ -3,9 +3,10 @@
 use std::process::exit;
 
 use hongkong_pollution_skill::model::{
-    AqhiReport, PollutantsReport, SummaryReport, WeatherReport, resolve_station,
+    AqhiReport, Averages, ForecastRange, ForecastReport, HistoryReading, HistoryReport,
+    PollutantsReport, SummaryReport, WeatherReport, mean, resolve_station,
 };
-use hongkong_pollution_skill::{Error, Result, VERSION, aqhi, mcp, pollutants, weather};
+use hongkong_pollution_skill::{Error, Result, VERSION, aqhi, epd_app, mcp, pollutants, weather};
 
 const USAGE: &str = "\
 hkpollution - Hong Kong air pollution data (EPD AQHI + HKO weather)
@@ -13,6 +14,8 @@ hkpollution - Hong Kong air pollution data (EPD AQHI + HKO weather)
 USAGE:
     hkpollution aqhi       [--station <name>] [--json]
     hkpollution pollutants [--station <name>] [--hours <1-24>] [--json]
+    hkpollution forecast   [--json]
+    hkpollution history    [--station <name>] [--hours <1-23>] [--json]
     hkpollution summary    [--json] [--with-weather]
     hkpollution weather    [--json]
     hkpollution mcp
@@ -20,7 +23,8 @@ USAGE:
 
 OPTIONS:
     --station <name>   case-insensitive station substring; ambiguous names return all matches
-    --hours <1-24>     newest hourly readings kept per station (default 1)
+    --hours <N>        newest hourly readings kept per station: 1-24 for `pollutants`,
+                       1-23 for `history` (default 1)
     --json             print one JSON object to stdout and nothing else
     --with-weather     add HKO temperature, humidity and warnings to the summary
 
@@ -66,6 +70,8 @@ fn run(args: &[String]) -> Result<()> {
         }
         "aqhi" => command_aqhi(&args[1..]),
         "pollutants" => command_pollutants(&args[1..]),
+        "forecast" => command_forecast(&args[1..]),
+        "history" => command_history(&args[1..]),
         "summary" => command_summary(&args[1..]),
         "weather" => command_weather(&args[1..]),
         other => Err(Error::usage(format!("unknown command: {other}"))),
@@ -76,6 +82,8 @@ fn run(args: &[String]) -> Result<()> {
 enum Command {
     Aqhi,
     Pollutants,
+    Forecast,
+    History,
     Summary,
     Weather,
 }
@@ -85,17 +93,23 @@ impl Command {
         match self {
             Self::Aqhi => "aqhi",
             Self::Pollutants => "pollutants",
+            Self::Forecast => "forecast",
+            Self::History => "history",
             Self::Summary => "summary",
             Self::Weather => "weather",
         }
     }
 
     fn allows_station(self) -> bool {
-        matches!(self, Self::Aqhi | Self::Pollutants)
+        matches!(self, Self::Aqhi | Self::Pollutants | Self::History)
     }
 
-    fn allows_hours(self) -> bool {
-        matches!(self, Self::Pollutants)
+    fn max_hours(self) -> Option<u32> {
+        match self {
+            Self::Pollutants => Some(pollutants::MAX_HOURS),
+            Self::History => Some(epd_app::MAX_HOURS),
+            _ => None,
+        }
     }
 
     fn allows_weather(self) -> bool {
@@ -135,7 +149,7 @@ fn parse_options(args: &[String], command: Command) -> Result<Options> {
         } else if arg == "--station" || arg.starts_with("--station=") {
             if !command.allows_station() {
                 return Err(Error::usage(format!(
-                    "--station is only valid for `aqhi` and `pollutants`, not `{}`",
+                    "--station is only valid for `aqhi`, `pollutants` and `history`, not `{}`",
                     command.name()
                 )));
             }
@@ -157,12 +171,12 @@ fn parse_options(args: &[String], command: Command) -> Result<Options> {
             }
             options.station = Some(value);
         } else if arg == "--hours" || arg.starts_with("--hours=") {
-            if !command.allows_hours() {
+            let Some(max_hours) = command.max_hours() else {
                 return Err(Error::usage(format!(
-                    "--hours is only valid for `pollutants`, not `{}`",
+                    "--hours is only valid for `pollutants` and `history`, not `{}`",
                     command.name()
                 )));
-            }
+            };
             let value = match arg.strip_prefix("--hours=") {
                 Some(inline) => {
                     index += 1;
@@ -170,7 +184,9 @@ fn parse_options(args: &[String], command: Command) -> Result<Options> {
                 }
                 None => {
                     let value = args.get(index + 1).ok_or_else(|| {
-                        Error::usage("--hours requires a number between 1 and 24")
+                        Error::usage(format!(
+                            "--hours requires a number between 1 and {max_hours}"
+                        ))
                     })?;
                     index += 2;
                     value.clone()
@@ -178,13 +194,13 @@ fn parse_options(args: &[String], command: Command) -> Result<Options> {
             };
             let hours: u32 = value.trim().parse().map_err(|_| {
                 Error::usage(format!(
-                    "--hours must be a number between 1 and 24, got {value:?}"
+                    "--hours must be a number between 1 and {max_hours}, got {value:?}"
                 ))
             })?;
-            if hours == 0 || hours > pollutants::MAX_HOURS {
-                return Err(Error::usage(
-                    "--hours must be a number between 1 and 24".to_string(),
-                ));
+            if hours == 0 || hours > max_hours {
+                return Err(Error::usage(format!(
+                    "--hours must be a number between 1 and {max_hours}"
+                )));
             }
             options.hours = Some(hours);
         } else {
@@ -231,6 +247,36 @@ fn command_pollutants(args: &[String]) -> Result<()> {
         print_json(&report)
     } else {
         print_pollutants(&report);
+        Ok(())
+    }
+}
+
+fn command_forecast(args: &[String]) -> Result<()> {
+    let options = parse_options(args, Command::Forecast)?;
+    if options.help {
+        println!("{USAGE}");
+        return Ok(());
+    }
+    let report = epd_app::fetch_forecast()?;
+    if options.json {
+        print_json(&report)
+    } else {
+        print_forecast(&report);
+        Ok(())
+    }
+}
+
+fn command_history(args: &[String]) -> Result<()> {
+    let options = parse_options(args, Command::History)?;
+    if options.help {
+        println!("{USAGE}");
+        return Ok(());
+    }
+    let report = epd_app::fetch_history(options.station.as_deref(), options.hours.unwrap_or(1))?;
+    if options.json {
+        print_json(&report)
+    } else {
+        print_history(&report);
         Ok(())
     }
 }
@@ -339,6 +385,87 @@ fn pollutant_row(
     vec![
         station.to_string(),
         pretty_time(time),
+        format_f64(reading.no2),
+        format_f64(reading.o3),
+        format_f64(reading.so2),
+        format_f64(reading.co),
+        format_f64(reading.pm10),
+        format_f64(reading.pm25),
+    ]
+}
+
+fn print_forecast(report: &ForecastReport) {
+    let rows: Vec<Vec<String>> = report
+        .periods
+        .iter()
+        .map(|period| {
+            vec![
+                period.period.clone(),
+                format_range(period.general),
+                format_range(period.roadside),
+            ]
+        })
+        .collect();
+    print_table(&["Period", "General", "Roadside"], &rows);
+    println!();
+    println!(
+        "source: EPD app API (fetched {}) — EPD data © Government of the HKSAR",
+        report.fetched_at
+    );
+}
+
+fn format_range(range: Option<ForecastRange>) -> String {
+    range.map_or_else(
+        || "-".to_string(),
+        |range| format!("{}-{}", range.min, range.max),
+    )
+}
+
+fn print_history(report: &HistoryReport) {
+    let mut rows: Vec<Vec<String>> = Vec::new();
+    for station in &report.stations {
+        let shown = &station.series[..(report.hours as usize).min(station.series.len())];
+        for reading in shown {
+            rows.push(history_row(&station.station, reading));
+        }
+        if shown.len() > 1 {
+            let averages = Averages::from_history(shown);
+            let aqhi_values: Vec<f64> = shown
+                .iter()
+                .filter_map(|reading| reading.aqhi)
+                .map(|aqhi| aqhi as f64)
+                .collect();
+            rows.push(vec![
+                station.station.clone(),
+                format!("avg {}", shown.len()),
+                format_f64(mean(&aqhi_values)),
+                format_f64(averages.no2),
+                format_f64(averages.o3),
+                format_f64(averages.so2),
+                format_f64(averages.co),
+                format_f64(averages.pm10),
+                format_f64(averages.pm25),
+            ]);
+        }
+    }
+    print_table(
+        &[
+            "Station", "Time", "AQHI", "NO2", "O3", "SO2", "CO", "PM10", "PM2.5",
+        ],
+        &rows,
+    );
+    println!();
+    println!(
+        "source: EPD app API (fetched {}) — EPD data © Government of the HKSAR",
+        report.fetched_at
+    );
+}
+
+fn history_row(station: &str, reading: &HistoryReading) -> Vec<String> {
+    vec![
+        station.to_string(),
+        pretty_time(&reading.time),
+        format_i64(reading.aqhi),
         format_f64(reading.no2),
         format_f64(reading.o3),
         format_f64(reading.so2),

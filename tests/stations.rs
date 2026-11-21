@@ -1,6 +1,9 @@
 //! Station matching tests: substring, case-insensitive, ambiguous, no match.
 
-use hongkong_pollution_skill::model::{AQHI_STATIONS, resolve_station};
+use hongkong_pollution_skill::model::{
+    AQHI_STATIONS, EPD_APP_STATIONS, app_category_label, app_station_id, app_station_name,
+    resolve_station,
+};
 
 #[test]
 fn station_list_has_eighteen_entries() {
@@ -52,4 +55,46 @@ fn no_match_lists_the_valid_stations() {
 fn empty_query_is_a_usage_error() {
     let error = resolve_station("   ").unwrap_err();
     assert!(error.is_usage());
+}
+
+#[test]
+fn app_station_table_maps_every_id_to_a_canonical_name() {
+    assert_eq!(EPD_APP_STATIONS.len(), 18);
+    for station in EPD_APP_STATIONS {
+        assert!(
+            AQHI_STATIONS.contains(&station.name_en),
+            "{} is not a canonical station name",
+            station.name_en
+        );
+        assert_eq!(app_station_name(station.id), Some(station.name_en));
+        assert_eq!(app_station_id(station.name_en), Some(station.id));
+        assert!(matches!(station.category, 0 | 1));
+    }
+
+    let mut ids: Vec<i64> = EPD_APP_STATIONS.iter().map(|station| station.id).collect();
+    ids.sort_unstable();
+    ids.dedup();
+    assert_eq!(ids.len(), 18, "monitor ids are unique");
+
+    let mut names: Vec<&str> = EPD_APP_STATIONS
+        .iter()
+        .map(|station| station.name_en)
+        .collect();
+    names.sort_unstable();
+    names.dedup();
+    assert_eq!(names.len(), 18, "canonical names are unique");
+
+    assert_eq!(app_station_id("sham shui po"), Some(66));
+    assert_eq!(app_station_name(66), Some("Sham Shui Po"));
+    assert_eq!(app_station_name(999), None);
+    assert_eq!(app_category_label(0), "general");
+    assert_eq!(app_category_label(1), "roadside");
+    assert_eq!(
+        EPD_APP_STATIONS
+            .iter()
+            .filter(|station| station.category == 1)
+            .count(),
+        3,
+        "Causeway Bay, Central and Mong Kok are the roadside monitors"
+    );
 }

@@ -4,12 +4,15 @@
 //! EPD documents, deliberately tolerant about attributes, CDATA and stray
 //! whitespace.
 
+use std::collections::{BTreeMap, BTreeSet};
+
 use serde_json::Value;
 
 use crate::error::{Error, Result};
 use crate::model::{
-    AQHI_STATIONS, AqhiReading, HkoReading, ParsedPollutants, PollutantReading, PollutantRecord,
-    WeatherReport,
+    AQHI_STATIONS, AqhiReading, ForecastEntry, ForecastPeriod, HistoryReading, HkoReading,
+    MonitorDetail, MonitorStation, ParsedForecast, ParsedPollutants, PollutantReading,
+    PollutantRecord, WeatherReport, app_station_name,
 };
 
 const MONTHS: [&str; 12] = [
@@ -506,4 +509,225 @@ fn value_f64(value: &Value, key: &str) -> Option<f64> {
         Some(Value::String(text)) => parse_measurement(text),
         _ => None,
     }
+}
+
+/// Parse the EPD app API forecast payload into its two unjoined lists.
+///
+/// # Errors
+///
+/// Returns [`Error::Parse`] when the document is not an object or carries no
+/// forecast period at all.
+pub fn parse_forecast_entries(input: &str) -> Result<ParsedForecast> {
+    let root: Value = serde_json::from_str(strip_bom(input))?;
+    if !root.is_object() {
+        return Err(Error::parse(
+            "EPD forecast JSON: expected a top-level object",
+        ));
+    }
+    let general = forecast_entries(&root, "general_stations");
+    let roadside = forecast_entries(&root, "roadside_stations");
+    if general.is_empty() && roadside.is_empty() {
+        return Err(Error::parse("EPD forecast JSON: no forecast periods found"));
+    }
+    Ok(ParsedForecast { general, roadside })
+}
+
+fn forecast_entries(root: &Value, key: &str) -> Vec<ForecastEntry> {
+    let Some(items) = root.get(key).and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    items
+        .iter()
+        .filter_map(|item| {
+            Some(ForecastEntry {
+                period: value_text(item, "forecast_period_en")?,
+                min: value_i64(item, "min")?,
+                max: value_i64(item, "max")?,
+            })
+        })
+        .collect()
+}
+
+/// Join the general and roadside forecast lists by position and period name.
+///
+/// General-station order leads; a roadside entry is matched by index when the
+/// names agree there, otherwise by name. Periods that exist on only one side
+/// are still emitted with `None` for the missing side, and any leftover
+/// roadside-only periods are appended in payload order.
+#[must_use]
+pub fn join_forecast(general: &[ForecastEntry], roadside: &[ForecastEntry]) -> Vec<ForecastPeriod> {
+    let mut used = vec![false; roadside.len()];
+    let mut periods = Vec::with_capacity(general.len() + roadside.len());
+    for (index, entry) in general.iter().enumerate() {
+        let mut matched = None;
+        if roadside
+            .get(index)
+            .is_some_and(|candidate| candidate.period == entry.period)
+        {
+            matched = Some(index);
+        }
+        if matched.is_none() {
+            matched = roadside
+                .iter()
+                .enumerate()
+                .position(|(at, candidate)| !used[at] && candidate.period == entry.period);
+        }
+        let roadside_range = matched.map(|at| {
+            used[at] = true;
+            roadside[at].range()
+        });
+        periods.push(ForecastPeriod {
+            period: entry.period.clone(),
+            general: Some(entry.range()),
+            roadside: roadside_range,
+        });
+    }
+    for (index, entry) in roadside.iter().enumerate() {
+        if !used[index] {
+            periods.push(ForecastPeriod {
+                period: entry.period.clone(),
+                general: None,
+                roadside: Some(entry.range()),
+            });
+        }
+    }
+    periods
+}
+
+/// Parse and join the EPD app API forecast payload.
+///
+/// # Errors
+///
+/// Propagates [`parse_forecast_entries`] failures.
+pub fn parse_forecast_json(input: &str) -> Result<Vec<ForecastPeriod>> {
+    let parsed = parse_forecast_entries(input)?;
+    Ok(join_forecast(&parsed.general, &parsed.roadside))
+}
+
+/// Parse the app API `/monitors` array.
+///
+/// Monitor ids are mapped to canonical English names through
+/// [`crate::model::EPD_APP_STATIONS`]; an id outside that table keeps the
+/// published (Traditional Chinese) name.
+///
+/// # Errors
+///
+/// Returns [`Error::Parse`] when the payload is not an array or yields no
+/// station.
+pub fn parse_monitors_json(input: &str) -> Result<Vec<MonitorStation>> {
+    let root: Value = serde_json::from_str(strip_bom(input))?;
+    let array = root
+        .as_array()
+        .ok_or_else(|| Error::parse("EPD monitors JSON: expected a top-level array"))?;
+    let mut stations = Vec::new();
+    for item in array {
+        let Some(id) = value_i64(item, "id") else {
+            continue;
+        };
+        let station = app_station_name(id)
+            .map(str::to_string)
+            .or_else(|| value_text(item, "name"))
+            .unwrap_or_else(|| format!("station {id}"));
+        let category = value_i64(item, "category").unwrap_or(0);
+        stations.push(MonitorStation {
+            id,
+            station,
+            category: u8::try_from(category).unwrap_or(0),
+            latitude: value_f64(item, "latitude"),
+            longitude: value_f64(item, "longitude"),
+            latest: latest_reading(item, "updated_at"),
+        });
+    }
+    if stations.is_empty() {
+        return Err(Error::parse("EPD monitors JSON: no station entries found"));
+    }
+    Ok(stations)
+}
+
+/// Parse one app API `/monitors/{id}` object, merging its seven histories into
+/// one newest-first series.
+///
+/// # Errors
+///
+/// Returns [`Error::Parse`] when the document is not an object, has no `id` or
+/// carries no history at all.
+pub fn parse_monitor_detail_json(input: &str) -> Result<MonitorDetail> {
+    let root: Value = serde_json::from_str(strip_bom(input))?;
+    if !root.is_object() {
+        return Err(Error::parse(
+            "EPD monitor JSON: expected a top-level object",
+        ));
+    }
+    let id = value_i64(&root, "id")
+        .ok_or_else(|| Error::parse("EPD monitor JSON: missing monitor id"))?;
+    let series = history_series(&root);
+    if series.is_empty() {
+        return Err(Error::parse(format!(
+            "EPD monitor JSON: no history found for station {id}"
+        )));
+    }
+    Ok(MonitorDetail {
+        id,
+        latest: latest_reading(&root, "updated_at"),
+        series,
+    })
+}
+
+fn latest_reading(value: &Value, time_key: &str) -> Option<HistoryReading> {
+    let time = value_text(value, time_key).map(|raw| normalize_datetime(&raw))?;
+    Some(HistoryReading {
+        time,
+        aqhi: value_i64(value, "aqhi"),
+        no2: value_f64(value, "no2"),
+        o3: value_f64(value, "o3"),
+        so2: value_f64(value, "so2"),
+        co: value_f64(value, "co"),
+        pm10: value_f64(value, "pm10"),
+        pm25: value_f64(value, "pm25"),
+    })
+}
+
+fn history_series(root: &Value) -> Vec<HistoryReading> {
+    let aqhi = history_values(root, "aqhi_histories");
+    let no2 = history_values(root, "no2_histories");
+    let o3 = history_values(root, "o3_histories");
+    let so2 = history_values(root, "so2_histories");
+    let co = history_values(root, "co_histories");
+    let pm10 = history_values(root, "pm10_histories");
+    let pm25 = history_values(root, "pm25_histories");
+    let mut times: BTreeSet<&String> = BTreeSet::new();
+    for series in [&aqhi, &no2, &o3, &so2, &co, &pm10, &pm25] {
+        times.extend(series.keys());
+    }
+    times
+        .into_iter()
+        .rev()
+        .map(|time| HistoryReading {
+            time: normalize_datetime(time),
+            aqhi: aqhi
+                .get(time)
+                .copied()
+                .flatten()
+                .map(|value| value.round() as i64),
+            no2: no2.get(time).copied().flatten(),
+            o3: o3.get(time).copied().flatten(),
+            so2: so2.get(time).copied().flatten(),
+            co: co.get(time).copied().flatten(),
+            pm10: pm10.get(time).copied().flatten(),
+            pm25: pm25.get(time).copied().flatten(),
+        })
+        .collect()
+}
+
+fn history_values(root: &Value, key: &str) -> BTreeMap<String, Option<f64>> {
+    let mut values = BTreeMap::new();
+    let Some(items) = root.get(key).and_then(Value::as_array) else {
+        return values;
+    };
+    for item in items {
+        if let Some(created_at) = value_text(item, "created_at") {
+            values.insert(created_at, value_f64(item, "value"));
+        }
+    }
+    values
 }

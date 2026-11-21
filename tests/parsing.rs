@@ -1,14 +1,19 @@
 //! Fixture tests for every parser. No network access.
 
+use hongkong_pollution_skill::model::{ForecastEntry, ForecastRange};
 use hongkong_pollution_skill::parse::{
-    blocks, inner_text, normalize_datetime, parse_aqhi_json, parse_aqhi_rss, parse_measurement,
-    parse_pollutants_xml, parse_weather_json, rfc2822_to_iso, strip_bom,
+    blocks, inner_text, join_forecast, normalize_datetime, parse_aqhi_json, parse_aqhi_rss,
+    parse_forecast_entries, parse_forecast_json, parse_measurement, parse_monitor_detail_json,
+    parse_monitors_json, parse_pollutants_xml, parse_weather_json, rfc2822_to_iso, strip_bom,
 };
 
 const AQHI_JSON: &str = include_str!("fixtures/aqhi.json");
 const AQHI_RSS: &str = include_str!("fixtures/aqhi_rss.xml");
 const POLLUTANTS_XML: &str = include_str!("fixtures/24pc.xml");
 const HKO_JSON: &str = include_str!("fixtures/hko.json");
+const EPD_FORECAST: &str = include_str!("fixtures/epd_forecast.json");
+const EPD_MONITORS: &str = include_str!("fixtures/epd_monitors.json");
+const EPD_MONITOR_66: &str = include_str!("fixtures/epd_monitor_66.json");
 
 #[test]
 fn aqhi_json_yields_every_station() {
@@ -186,4 +191,116 @@ fn tag_scanner_handles_attributes_and_cdata() {
     let items = blocks("<r><item>one</item><item>two</item></r>", "item");
     assert_eq!(items, vec!["one", "two"]);
     assert!(blocks("<r></r>", "item").is_empty());
+}
+
+fn entry(period: &str, min: i64, max: i64) -> ForecastEntry {
+    ForecastEntry {
+        period: period.to_string(),
+        min,
+        max,
+    }
+}
+
+#[test]
+fn forecast_json_joins_general_and_roadside_by_position() {
+    let parsed = parse_forecast_entries(EPD_FORECAST).unwrap();
+    assert_eq!(parsed.general.len(), 2);
+    assert_eq!(parsed.roadside.len(), 2);
+    assert_eq!(parsed.general[0].period, "Tomorrow A.M.");
+
+    let periods = parse_forecast_json(EPD_FORECAST).unwrap();
+    assert_eq!(periods.len(), 2);
+    assert_eq!(periods[0].period, "Tomorrow A.M.");
+    assert_eq!(periods[0].general, Some(ForecastRange { min: 0, max: 1 }));
+    assert_eq!(periods[0].roadside, Some(ForecastRange { min: 0, max: 1 }));
+    assert_eq!(periods[1].period, "Tomorrow P.M.");
+    assert_eq!(periods[1].general, Some(ForecastRange { min: 0, max: 1 }));
+}
+
+#[test]
+fn forecast_join_falls_back_to_name_and_nulls_missing_sides() {
+    let general = vec![entry("Tomorrow A.M.", 0, 1), entry("Tomorrow P.M.", 1, 2)];
+    let roadside = vec![entry("Tomorrow P.M.", 2, 3), entry("Tomorrow A.M.", 4, 5)];
+    let joined = join_forecast(&general, &roadside);
+    assert_eq!(joined.len(), 2);
+    assert_eq!(joined[0].period, "Tomorrow A.M.");
+    assert_eq!(joined[0].roadside, Some(ForecastRange { min: 4, max: 5 }));
+    assert_eq!(joined[1].period, "Tomorrow P.M.");
+    assert_eq!(joined[1].roadside, Some(ForecastRange { min: 2, max: 3 }));
+
+    let unequal = join_forecast(&general[..1], &[entry("Tomorrow P.M.", 2, 3)]);
+    assert_eq!(unequal.len(), 2);
+    assert_eq!(
+        unequal[0].roadside, None,
+        "general-only period keeps a null side"
+    );
+    assert_eq!(unequal[1].period, "Tomorrow P.M.");
+    assert_eq!(
+        unequal[1].general, None,
+        "roadside-only period keeps a null side"
+    );
+    assert_eq!(unequal[1].roadside, Some(ForecastRange { min: 2, max: 3 }));
+
+    assert!(parse_forecast_json("{}").is_err());
+    assert!(parse_forecast_json("[]").is_err());
+}
+
+#[test]
+fn monitors_json_maps_ids_to_canonical_names() {
+    let monitors = parse_monitors_json(EPD_MONITORS).unwrap();
+    assert_eq!(monitors.len(), 18);
+
+    let sham_shui_po = &monitors[0];
+    assert_eq!(sham_shui_po.id, 66);
+    assert_eq!(sham_shui_po.station, "Sham Shui Po");
+    assert_eq!(sham_shui_po.category, 0);
+    assert_eq!(sham_shui_po.latitude, Some(22.330099));
+    assert_eq!(sham_shui_po.longitude, Some(114.158867));
+    let latest = sham_shui_po.latest.as_ref().unwrap();
+    assert_eq!(latest.time, "2026-11-21T18:00:00+08:00");
+    assert_eq!(latest.aqhi, Some(4));
+    assert_eq!(latest.no2, Some(56.4));
+    assert_eq!(latest.o3, Some(58.6));
+    assert_eq!(latest.co, None);
+
+    assert!(
+        monitors
+            .iter()
+            .all(|monitor| !monitor.station.contains('深')),
+        "every published Chinese name is replaced by its canonical English name"
+    );
+    assert!(parse_monitors_json("{}").is_err());
+    assert!(parse_monitors_json("[]").is_err());
+}
+
+#[test]
+fn monitor_detail_merges_histories_newest_first() {
+    let detail = parse_monitor_detail_json(EPD_MONITOR_66).unwrap();
+    assert_eq!(detail.id, 66);
+    assert_eq!(detail.series.len(), 23);
+
+    let newest = &detail.series[0];
+    assert_eq!(newest.time, "2026-11-21T18:00:00+08:00");
+    assert_eq!(newest.aqhi, Some(4));
+    assert_eq!(newest.no2, Some(56.4));
+    assert_eq!(newest.o3, Some(58.6));
+    assert_eq!(newest.so2, Some(5.7));
+    assert_eq!(newest.co, None, "a null history value stays null");
+    assert_eq!(newest.pm10, Some(15.1));
+    assert_eq!(newest.pm25, Some(7.8));
+
+    let oldest = detail.series.last().unwrap();
+    assert_eq!(oldest.time, "2026-11-20T20:00:00+08:00");
+    assert_eq!(oldest.aqhi, Some(3));
+    assert_eq!(oldest.no2, Some(45.2));
+
+    assert!(
+        detail
+            .series
+            .windows(2)
+            .all(|pair| pair[0].time > pair[1].time),
+        "the merged series is strictly newest first"
+    );
+    assert!(parse_monitor_detail_json("[]").is_err());
+    assert!(parse_monitor_detail_json("{\"id\":66}").is_err());
 }

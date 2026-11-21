@@ -10,6 +10,7 @@
 //! - [`http`] performs the (timeout-guarded) HTTP calls,
 //! - [`parse`] turns raw payloads into [`model`] values without touching the network,
 //! - [`aqhi`], [`pollutants`] and [`weather`] combine both for one data source each,
+//! - [`epd_app`] adds the undocumented EPD app API forecast and station history,
 //! - [`mcp`] speaks JSON-RPC 2.0 over stdio for AI agents.
 //!
 //! ```
@@ -21,6 +22,7 @@
 //! ```
 
 pub mod aqhi;
+pub mod epd_app;
 pub mod error;
 pub mod http;
 pub mod mcp;
