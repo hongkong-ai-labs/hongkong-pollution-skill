@@ -7,7 +7,8 @@
 **Hong Kong air quality in one binary.**
 
 Current AQHI, pollutant concentrations, a network summary and HKO weather —
-from official open data, as a CLI for humans and an MCP server for agents.
+plus tomorrow's forecast and street-level model data — from official open
+data, as a CLI for humans and an MCP server for agents.
 
 [![CI](https://github.com/hongkong-ai-labs/hongkong-pollution-skill/actions/workflows/ci.yml/badge.svg)](https://github.com/hongkong-ai-labs/hongkong-pollution-skill/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/hongkong-ai-labs/hongkong-pollution-skill?style=flat-square&color=0e9488)](https://github.com/hongkong-ai-labs/hongkong-pollution-skill/releases/latest)
@@ -64,14 +65,19 @@ hkpollution 0.1.0
 | --- | --- | --- |
 | `hkpollution aqhi` | Current Air Quality Health Index for all 18 EPD stations, with risk band and publish time | table or `--json` |
 | `hkpollution pollutants` | Past 24 h NO2, O3, SO2, CO, PM10, PM2.5 per station, with per-pollutant averages | table or `--json` |
+| `hkpollution forecast` | Tomorrow's AQHI range per period, split into general and roadside stations, from the EPD app API | table or `--json` |
+| `hkpollution history` | Hourly AQHI and NO2/O3/SO2/CO/PM10/PM2.5 per station, newest first, from the EPD app API | table or `--json` |
+| `hkpollution street` | PRAISE-HK street-level AQHI, added health risk and pollutants for one coordinate | table or `--json` |
 | `hkpollution summary` | Network worst/mean AQHI, risk counts, worst PM2.5 and NO2 station, optional HKO weather | table or `--json` |
 | `hkpollution weather` | HKO temperature, humidity and active warnings | table or `--json` |
-| `hkpollution mcp` | The same four datasets as MCP tools over stdio | JSON-RPC |
+| `hkpollution mcp` | All of the above as MCP tools over stdio | JSON-RPC |
 
-Everything reads official endpoints only: **no API keys, no third-party
-services, no scraping.** The dependency list is `serde`, `serde_json` and
-`ureq`; the XML feeds are parsed by a small hand-written tag scanner, and the
-release binaries are static and stripped.
+The four documented datasets read official endpoints only. `forecast`,
+`history` and `street` use the app APIs behind the EPD and PRAISE-HK mobile
+apps — undocumented and keyless, but still **no API keys and no scraping.**
+The dependency list is `serde`, `serde_json` and `ureq`; the XML feeds are
+parsed by a small hand-written tag scanner, and the release binaries are
+static and stripped.
 
 ## Usage
 
@@ -128,6 +134,69 @@ $ echo $?
 1
 ```
 
+## Forecast and street-level data
+
+Two more datasets come from the app APIs the mobile apps use rather than the
+open-data portal. Both are undocumented, so they are additive: the documented
+feeds stay the primary source for everything above, and a failure exits `1`
+like any other upstream error.
+
+### Forecast
+
+`hkpollution forecast` shows the AQHI range the EPD forecasts for each
+period, for general and roadside stations separately:
+
+```console
+$ hkpollution forecast
+Period         General  Roadside
+-------------  -------  --------
+Tomorrow A.M.  0-1      0-1
+Tomorrow P.M.  0-1      0-1
+
+source: EPD app API (fetched 2026-11-21T19:43:42+08:00) — EPD data © Government of the HKSAR
+```
+
+### Station history
+
+`hkpollution history` is the app-API counterpart of `pollutants`: one row per
+station by default, or the newest N hourly readings with `--station` and
+`--hours` (1-23), with the AQHI alongside the pollutants and the same `avg N`
+row as `pollutants`:
+
+```console
+$ hkpollution history --station "mong kok" --hours 3
+Station   Time              AQHI  NO2   O3    SO2  CO     PM10  PM2.5
+--------  ----------------  ----  ----  ----  ---  -----  ----  -----
+Mong Kok  2026-11-21 19:00  4     92.5  34.3  6.3  469.7  21.6  12.4
+Mong Kok  2026-11-21 18:00  4     97.0  34.2  5.7  475.8  22.2  11.8
+Mong Kok  2026-11-21 17:00  4     94.6  36.1  5.9  511.9  26.7  15.2
+Mong Kok  avg 3             4.0   94.7  34.9  6.0  485.8  23.5  13.1
+
+source: EPD app API (fetched 2026-11-21T19:43:42+08:00) — EPD data © Government of the HKSAR
+```
+
+### Street level
+
+`hkpollution street --lat 22.33751 --lng 114.263` asks the PRAISE-HK model
+for one Hong Kong coordinate. The default `--hours 24` covers the current
+hour and the forecast, up to 48:
+
+```console
+$ hkpollution street --lat 22.33751 --lng 114.263 --hours 3
+Time              AQHI  %AR  NO2   O3     PM10  PM2.5  SO2
+----------------  ----  ---  ----  -----  ----  -----  ---
+2026-11-21 19:00  4     6.3  12.8  103.9  16.1  10.1   4.7
+2026-11-21 20:00  4     6.3  7.2   113.1  18.3  11.5   4.8
+2026-11-21 21:00  4     6.6  3.4   120.6  20.4  13.2   4.8
+
+source: PRAISE-HK street-level model © HKUST Institute for the Environment (fetched 2026-11-21T19:44:04+08:00)
+```
+
+`--lat` and `--lng` are required together and must lie inside Hong Kong
+(22.1-22.6 and 113.8-114.5); anything else is a usage error, exit `2`. `%AR`
+is the added health risk, and `-` is a value the model does not publish for
+that hour.
+
 ## MCP server
 
 `hkpollution mcp` speaks JSON-RPC 2.0 over stdio — one JSON object per line,
@@ -151,6 +220,9 @@ binary:
 | `pollutant_concentrations` | `{ "station"?: string, "hours"?: integer 1-24 }` | Latest reading plus the hourly series, per station |
 | `pollution_summary` | `{ "include_weather"?: boolean }` | The CLI `summary` payload |
 | `hong_kong_weather` | `{}` | The CLI `weather` payload |
+| `aqhi_forecast` | `{}` | The CLI `forecast` payload |
+| `station_history` | `{ "station"?: string, "hours"?: integer 1-23 }` | Hourly AQHI and pollutant history per station, newest first |
+| `street_level_aqhi` | `{ "lat": number, "lng": number, "hours"?: integer 1-48 }` | The CLI `street` payload |
 
 Every result is `{"content":[{"type":"text","text":"<pretty JSON>"}],"isError":false}`.
 An upstream failure returns `isError: true` with a readable message instead of
@@ -177,6 +249,11 @@ server keeps serving until stdin closes.
 | EPD AQHI (RSS) | `https://www.aqhi.gov.hk/epd/ddata/html/out/aqhi_ind_rss_Eng.xml` | Fallback when the JSON host fails |
 | EPD 24-hour pollutant concentrations (XML) | `https://www.aqhi.gov.hk/epd/ddata/html/out/24pc_Eng.xml` | Hourly NO2/O3/SO2/CO/PM10/PM2.5, µg/m³ |
 | HKO current readings (JSON) | `https://data.weather.gov.hk/weatherAPI/opendata/weather.php?dataType=rhrread&lang=en` | Temperature, humidity, warnings |
+| EPD app API (JSON, undocumented) | `https://app.epd-asmg.gov.hk/api/v2/forecast`, `https://app.epd-asmg.gov.hk/api/v2/monitors` | Tomorrow's AQHI range, hourly per-station history |
+| PRAISE-HK model API (JSON, undocumented) | `https://praise-web.ust.hk:8443/api/pollutant_index` | Street-level AQHI, added health risk and pollutants at a coordinate |
+
+A `source` of `EPD app API` or `PRAISE-HK` marks a report from one of those
+undocumented app APIs; `EPD` and `HKO` keep their existing meaning.
 
 The 18 AQHI stations are Central/Western, Southern, Eastern, Kwun Tong, Sham
 Shui Po, Kwai Chung, Tsuen Wan, Tseung Kwan O, Yuen Long, Tuen Mun, Tung
@@ -185,8 +262,10 @@ the last three are roadside stations.
 
 > **Attribution.** Data is published by the Government of the Hong Kong SAR:
 > the [Environmental Protection Department](https://www.aqhi.gov.hk/) (AQHI,
-> pollutant concentrations) and the [Hong Kong Observatory](https://www.hko.gov.hk/)
-> (weather readings). Keep their attribution when you redistribute the data.
+> pollutant concentrations, forecast and station history) and the
+> [Hong Kong Observatory](https://www.hko.gov.hk/) (weather readings). The
+> street-level model is the PRAISE-HK project of the HKUST Institute for the
+> Environment. Keep their attribution when you redistribute the data.
 
 <details>
 <summary><strong>JSON shapes</strong></summary>
@@ -230,6 +309,32 @@ the last three are roadside stations.
  "source":"EPD"}
 ```
 
+`hkpollution forecast --json`:
+
+```json
+{"periods":[{"period":"Tomorrow A.M.","general":{"min":0,"max":1},"roadside":{"min":0,"max":1}},{"period":"Tomorrow P.M.","general":{"min":0,"max":1},"roadside":{"min":0,"max":1}}],"source":"EPD app API","fetched_at":"2026-11-21T19:43:42+08:00"}
+```
+
+`hkpollution history --json` — newest first, and `series` always carries the
+full upstream window (23 hours) while `hours` trims only the table:
+
+```json
+{"hours":2,"stations":[{"station":"Mong Kok","station_id":81,"category":"roadside","latitude":22.322584,"longitude":114.168297,
+ "latest":{"time":"2026-11-21T19:00:00+08:00","aqhi":4,"no2":92.5,"o3":34.3,"so2":6.3,"co":469.7,"pm10":21.6,"pm25":12.4},
+ "series":[{"time":"2026-11-21T19:00:00+08:00","aqhi":4,"no2":92.5,"o3":34.3,"so2":6.3,"co":469.7,"pm10":21.6,"pm25":12.4},
+           {"time":"2026-11-21T18:00:00+08:00","aqhi":4,"no2":97.0,"o3":34.2,"so2":5.7,"co":475.8,"pm10":22.2,"pm25":11.8}, ...]}],
+ "source":"EPD app API","fetched_at":"2026-11-21T19:44:05+08:00"}
+```
+
+`hkpollution street --json`:
+
+```json
+{"location":{"lat":22.33751,"lng":114.263},
+ "current":{"time":"2026-11-21T19:00+08:00","aqhi":4,"added_health_risk":6.3,"no2":12.8,"o3":103.9,"pm10":16.1,"pm25":10.1,"so2":4.7},
+ "series":[{"time":"2026-11-21T19:00+08:00",...},{"time":"2026-11-21T20:00+08:00",...}],
+ "source":"PRAISE-HK","fetched_at":"2026-11-21T19:44:05+08:00"}
+```
+
 Timestamps are ISO-8601 in Hong Kong time; concentrations are µg/m³.
 
 </details>
@@ -252,13 +357,15 @@ Layout:
 
 | Path | Contents |
 | --- | --- |
-| `src/parse.rs` | Pure parsers for AQHI JSON/RSS, the 24-hour XML and HKO JSON |
+| `src/parse.rs` | Pure parsers for AQHI JSON/RSS, the 24-hour XML, HKO JSON and the app APIs |
 | `src/model.rs` | Serialised payload types, station lookup, AQHI rollup |
 | `src/http.rs` | `ureq` GET with 10 s connect / 20 s read timeouts and a User-Agent |
 | `src/aqhi.rs` | AQHI fetch with RSS fallback, and the `summary` payload |
 | `src/pollutants.rs` | Pollutant fetch, `--hours` windowing, averages, extremes |
 | `src/weather.rs` | HKO fetch |
-| `src/mcp.rs` | JSON-RPC 2.0 stdio server and the four tools |
+| `src/epd_app.rs` | EPD app API forecast and per-station history |
+| `src/praise.rs` | PRAISE-HK street-level fetch and Hong Kong bounds validation |
+| `src/mcp.rs` | JSON-RPC 2.0 stdio server and the MCP tools |
 | `src/main.rs` | CLI: argument parsing, tables, JSON output |
 | `SKILL.md` | The agent-skill manifest: what the CLI reports and how to call it |
 | `scripts/install.sh` | Release downloader with checksum verification and a cargo fallback |
