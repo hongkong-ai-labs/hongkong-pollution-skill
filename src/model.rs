@@ -310,8 +310,18 @@ pub fn app_station_id(name: &str) -> Option<i64> {
         .map(|station| station.id)
 }
 
-/// `general` for app API category 0, `roadside` for category 1.
+/// `general` or `roadside` for a canonical station name.
+///
+/// The three roadside stations are Causeway Bay, Central and Mong Kok; every
+/// other station monitors general urban or background air.
 #[must_use]
+pub fn station_category(station: &str) -> &'static str {
+    match station {
+        "Causeway Bay" | "Central" | "Mong Kok" => "roadside",
+        _ => "general",
+    }
+}
+
 pub fn app_category_label(category: u8) -> &'static str {
     if category == 1 { "roadside" } else { "general" }
 }

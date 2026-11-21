@@ -81,6 +81,12 @@ $ hkpollution --version
 hkpollution 0.3.0
 ```
 
+## Self-update
+
+`hkpollution update --check` reports the current version, latest release and
+the detected install method. `hkpollution update` updates with that same
+method: cargo install, the release installer, a source rebuild or Homebrew.
+
 ## What you get
 
 | Command | Data | Output |

@@ -46,21 +46,25 @@ fn doctor_json_has_the_documented_shape() {
             source: "data.gov.hk AQHI",
             url: format!("{base}/aqhi"),
             schema: Schema::FirstItem("station"),
+            max_age_secs: None,
         },
         Probe {
             source: "aqhi.gov.hk RSS",
             url: format!("{base}/rss"),
             schema: Schema::Elements(&["item"]),
+            max_age_secs: None,
         },
         Probe {
             source: "EPD app forecast",
             url: format!("{base}/forecast"),
             schema: Schema::Keys(&["general_stations"]),
+            max_age_secs: None,
         },
         Probe {
             source: "unreachable",
             url: "http://127.0.0.1:1/nothing".to_string(),
             schema: Schema::Keys(&["AQHIBN"]),
+            max_age_secs: None,
         },
     ];
     let report = run(&probes);

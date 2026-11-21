@@ -65,6 +65,7 @@ It checks, in order: `$HKPOLLUTION_BIN`, `hkpollution` on `PATH`,
 | `hkpollution brief --lat L --lng L [--json]` | Place name, street AQHI, nearest station, weather and advice in one call |
 | `hkpollution map --bbox lat0,lng0,lat1,lng1 [--json]` | PRAISE-HK raster tile link for a bounding box |
 | `hkpollution about [--json]` | The app's about pages |
+| `hkpollution update [--check] [--force]` | Self-update using the detected install method |
 | `hkpollution mcp` | Every dataset above as MCP tools over stdio |
 
 `--station` is a case-insensitive substring match; an ambiguous name returns

@@ -86,8 +86,9 @@ pub fn get_text(url: &str) -> Result<String> {
     let total = attempts();
     let mut attempt = 1;
     loop {
-        match request_once(&agent, url) {
-            Ok(body) => return Ok(body),
+        match request_once(&agent, url, None) {
+            Ok(Fetched::Body(body)) => return Ok(body),
+            Ok(Fetched::NotModified) => return Ok(String::new()),
             Err(failure) => {
                 if attempt >= total || !failure.retryable {
                     return Err(Error::http(url, failure.message));
@@ -105,6 +106,10 @@ pub fn get_text(url: &str) -> Result<String> {
 /// `ttl_secs` is the source's fresh window; `--max-age` replaces it for this
 /// run and `--no-cache` skips both the read and the write. Cache I/O errors are
 /// ignored by [`crate::cache`], so a broken cache never fails a command.
+///
+/// An expired entry is revalidated with `If-Modified-Since`: a `304` restarts
+/// its window without a rewrite, and a network failure serves the stale body
+/// rather than failing. A cold miss still returns the error.
 pub fn get_cached(url: &str, ttl_secs: u64) -> Result<String> {
     if !CACHE_ENABLED.load(Ordering::Relaxed) {
         return get_text(url);
@@ -116,9 +121,49 @@ pub fn get_cached(url: &str, ttl_secs: u64) -> Result<String> {
     if let Some(body) = cache::read(url, ttl) {
         return Ok(body);
     }
-    let body = get_text(url)?;
-    cache::write(url, &body);
-    Ok(body)
+    let stored = cache::read_stored(url);
+    let known = stored.as_ref().map(|(_, stored_at)| *stored_at);
+    match get_conditional(url, known) {
+        Ok(Some(body)) => {
+            cache::write(url, &body);
+            Ok(body)
+        }
+        Ok(None) => {
+            cache::touch(url);
+            match stored {
+                Some((body, _)) => Ok(body),
+                None => Err(Error::http(url, "304 without a cached body")),
+            }
+        }
+        Err(error) => match stored {
+            Some((body, _)) => Ok(body),
+            None => Err(error),
+        },
+    }
+}
+
+/// GET with an optional `If-Modified-Since`, retried like [`get_text`].
+///
+/// Returns `Ok(None)` for `304 Not Modified`.
+fn get_conditional(url: &str, modified_since: Option<i64>) -> Result<Option<String>> {
+    let agent = agent();
+    let total = attempts();
+    let header = modified_since.map(crate::rfc1123_from_unix);
+    let mut attempt = 1;
+    loop {
+        match request_once(&agent, url, header.as_deref()) {
+            Ok(Fetched::Body(body)) => return Ok(Some(body)),
+            Ok(Fetched::NotModified) => return Ok(None),
+            Err(failure) => {
+                if attempt >= total || !failure.retryable {
+                    return Err(Error::http(url, failure.message));
+                }
+                let wait = failure.retry_after.unwrap_or_else(|| backoff(attempt));
+                sleep(wait);
+                attempt += 1;
+            }
+        }
+    }
 }
 
 fn backoff(attempt: u32) -> Duration {
@@ -133,13 +178,37 @@ struct Failure {
     retry_after: Option<Duration>,
 }
 
-fn request_once(agent: &ureq::Agent, url: &str) -> std::result::Result<String, Failure> {
-    match agent.get(url).call() {
-        Ok(response) => response.into_string().map_err(|error| Failure {
-            message: error.to_string(),
-            retryable: true,
-            retry_after: None,
-        }),
+/// What one request produced.
+enum Fetched {
+    /// A response body.
+    Body(String),
+    /// `304 Not Modified` for a conditional request.
+    NotModified,
+}
+
+fn request_once(
+    agent: &ureq::Agent,
+    url: &str,
+    modified_since: Option<&str>,
+) -> std::result::Result<Fetched, Failure> {
+    let mut request = agent.get(url);
+    if let Some(value) = modified_since {
+        request = request.set("If-Modified-Since", value);
+    }
+    match request.call() {
+        Ok(response) => {
+            if response.status() == 304 {
+                return Ok(Fetched::NotModified);
+            }
+            response
+                .into_string()
+                .map(Fetched::Body)
+                .map_err(|error| Failure {
+                    message: error.to_string(),
+                    retryable: true,
+                    retry_after: None,
+                })
+        }
         Err(ureq::Error::Status(code, response)) => Err(Failure {
             message: format!("status code {code}"),
             retryable: code == 429 || (500..=599).contains(&code),
