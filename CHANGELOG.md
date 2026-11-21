@@ -8,11 +8,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- `tide`: latest observed height for every reporting HKO station, and with
-  `--station <name|code>` that day's predicted high and low tides. Closed
-  stations are omitted and unnamed queries list only stations with data.
-- `sea-temp`: HKO daily mean sea temperature at Waglan Island, with the latest
-  reading plus mean, minimum and maximum over `--days` (default 14).
 - `recycling --lat --lng`: the nearest of EPD's 9,700 recyclable collection
   points, with accepted waste types, opening hours, distance and a `--type`
   filter (for example `--type glass`).

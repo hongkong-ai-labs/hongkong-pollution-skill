@@ -113,8 +113,6 @@ method: cargo install, the release installer, a source rebuild or Homebrew.
 | `hkpollution digest` | One line per source for a cron job or morning check | report or `--json` |
 | `hkpollution recycling` | Nearest recyclable collection points with accepted waste types, opening hours and distance | table or `--json` |
 | `hkpollution watch` | Alert loop over AQHI, active red tides and radiation, with `--once` for cron | lines or NDJSON |
-| `hkpollution tide` | Latest observed tide heights and, for a named station, predicted high and low tides | table or `--json` |
-| `hkpollution sea-temp` | Daily mean sea temperature at Waglan Island with a window mean, min and max | report or `--json` |
 | `hkpollution map` | PRAISE-HK raster tile link for a bounding box | report or `--json` |
 | `hkpollution about` | The app's about pages, privacy policy and long-term air quality links | report or `--json` |
 | `hkpollution mcp` | All of the above as MCP tools over stdio | JSON-RPC |
@@ -376,22 +374,6 @@ time: … ALERT air: AQHI 4 at Mong Kok (Moderate) reached the threshold of 4
 exit status 3
 ```
 
-### Tides and sea temperature
-
-```console
-$ hkpollution tide --station "Quarry Bay"
-STATION     CODE  OBSERVED      HIGH/LOW
-----------  ----  ------------  ----------------------------------------------------------------
-Quarry Bay  QUB   02:05 1.19 m  low 01:15 1.10m · high 07:35 1.81m · low 12:42 1.23m · high 19:…
-
-$ hkpollution sea-temp --days 7
-sea temperature: 27.6 °C on 2026-10-31 (Waglan Island)
-7 days to 2026-10-31: mean 27.7 °C, min 27.5 °C, max 27.9 °C (7 readings)
-```
-
-With no `--station`, `tide` lists only the stations currently reporting. Sea
-temperature is published with a lag, so the reading date is always shown.
-
 ### Statistics and comparison
 
 `stats` keeps a local observation log (one line per station-hour, 90 days) in
@@ -540,9 +522,6 @@ server keeps serving until stdin closes.
 | AFCD red tide sightings (CSV) | `https://redtide.afcd.gov.hk/data/RTMS_ob_RTLE.csv` | Active and recent red tides with coordinates |
 | HKO ambient gamma radiation (CSV) | `https://data.weather.gov.hk/weatherAPI/hko_data/regional-weather/latest_hourly_rmn.csv` | Hourly mean dose rate per station, µSv/h |
 | HKO UV index (CSV) | `https://data.weather.gov.hk/weatherAPI/hko_data/regional-weather/latest_15min_uvindex.csv` | 15-minute mean UV index |
-| HKO latest tidal information (CSV) | `https://data.weather.gov.hk/weatherAPI/hko_data/tide/ALL_en.csv` | Observed height and time per reporting station |
-| HKO high/low tide predictions (JSON) | `https://data.weather.gov.hk/weatherAPI/opendata/opendata.php?dataType=HLT&station=<code>&year=&month=&day=` | Predicted extremes for one station and day |
-| HKO daily mean sea temperature (CSV) | `https://data.weather.gov.hk/weatherAPI/cis/csvfile/WGL/<year>/daily_WGL_SST_<year>.csv` | Daily mean at Waglan Island |
 | Waste Reduction and Recycling collection points (CSV) | `https://www.wastereduction.gov.hk/sites/default/files/wasteless.csv` | Coordinates, accepted waste types and opening hours per point |
 
 A `source` of `EPD app API` or `PRAISE-HK` marks a report from one of those
@@ -689,12 +668,6 @@ recorded in [`NOTES.md`](NOTES.md).
 ```sh
 just release 0.4.0
 ```
-
-`rust-toolchain.toml` pins the stable toolchain with `rustfmt` and
-`clippy`, so `rustup` sets contributors up automatically. `just doc`
-builds the API documentation. See `CONTRIBUTING.md` for the full check
-list and the signed-commit requirement.
-
 
 That creates and pushes the annotated tag `v0.4.0`;
 [`.github/workflows/release.yml`](.github/workflows/release.yml) then checks the

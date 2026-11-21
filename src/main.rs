@@ -9,8 +9,8 @@ use hongkong_pollution_skill::model::{
 };
 use hongkong_pollution_skill::{
     Error, Result, VERSION, advice, advice::Lang, aqhi, aqhi24, beach, brief, digest, doctor,
-    epd_app, http, mcp, pollutants, praise, radiation, recycling, redtide, seatemp, stats, tide,
-    uv, watch, water, weather,
+    epd_app, http, mcp, pollutants, praise, radiation, recycling, redtide, stats, uv, watch, water,
+    weather,
 };
 
 mod update;
@@ -46,8 +46,6 @@ USAGE:
     hkpollution compare    [--json]
     hkpollution digest     [--json]
     hkpollution recycling  --lat <22.x> --lng <114.x> [--limit <1-50>] [--type <text>] [--json]
-    hkpollution tide       [--station <name|code>] [--date <YYYY-MM-DD>] [--json]
-    hkpollution sea-temp   [--days <1-365>] [--json]
     hkpollution watch      [--interval <secs>] [--aqhi <1-11>] [--red-tide] [--radiation]
                            [--once] [--json]
     hkpollution map        --bbox <lat0,lng0,lat1,lng1> [--pid <id>] [--at <iso>] [--json]
@@ -137,8 +135,6 @@ fn run(args: &[String]) -> Result<()> {
         "compare" => command_compare(&args[1..]),
         "digest" => command_digest(&args[1..]),
         "recycling" => command_recycling(&args[1..]),
-        "tide" => command_tide(&args[1..]),
-        "sea-temp" | "seatemp" => command_sea_temp(&args[1..]),
         "watch" => command_watch(&args[1..]),
         "advice" => command_advice(&args[1..]),
         "brief" => command_brief(&args[1..]),
@@ -2437,137 +2433,4 @@ fn command_watch(args: &[String]) -> Result<()> {
         }
         std::thread::sleep(std::time::Duration::from_secs(interval));
     }
-}
-
-fn command_tide(args: &[String]) -> Result<()> {
-    let mut json = false;
-    let mut station: Option<String> = None;
-    let mut date: Option<String> = None;
-    let mut index = 0;
-    while index < args.len() {
-        let arg = args[index].as_str();
-        if cache_flag(arg, args, &mut index)? {
-            continue;
-        }
-        match arg {
-            "--json" => {
-                json = true;
-                index += 1;
-            }
-            "--help" | "-h" => {
-                println!("{USAGE}");
-                return Ok(());
-            }
-            "--station" | "--date" => {
-                let value = take_value(args, &mut index, arg, arg)?;
-                match arg {
-                    "--station" => station = Some(value),
-                    _ => date = Some(value),
-                }
-            }
-            other => {
-                return Err(Error::usage(format!(
-                    "unknown argument for `tide`: {other}"
-                )));
-            }
-        }
-    }
-    let report = tide::fetch(station.as_deref(), date.as_deref())?;
-    if json {
-        return print_json(&report);
-    }
-    if report.stations.is_empty() {
-        println!("No tide station matched.");
-        return Ok(());
-    }
-    let rows: Vec<Vec<String>> = report
-        .stations
-        .iter()
-        .map(|entry| {
-            let observed = entry.observed.as_ref().map_or_else(
-                || "-".to_string(),
-                |tide| format!("{} {:.2} m", tide.time, tide.height_m),
-            );
-            let events = if entry.events.is_empty() {
-                "-".to_string()
-            } else {
-                truncate(
-                    &entry
-                        .events
-                        .iter()
-                        .map(|event| {
-                            format!("{} {} {:.2}m", event.kind, event.time, event.height_m)
-                        })
-                        .collect::<Vec<String>>()
-                        .join(" · "),
-                    64,
-                )
-            };
-            vec![entry.station.clone(), entry.code.clone(), observed, events]
-        })
-        .collect();
-    print_table(&["STATION", "CODE", "OBSERVED", "HIGH/LOW"], &rows);
-    println!(
-        "\n{} station(s); predictions for {}{}",
-        report.count,
-        report.date,
-        if report.stations.iter().all(|entry| entry.events.is_empty()) {
-            " (add --station for high/low)"
-        } else {
-            ""
-        }
-    );
-    println!("\nsource: {}", report.source);
-    Ok(())
-}
-
-fn command_sea_temp(args: &[String]) -> Result<()> {
-    let mut json = false;
-    let mut days = seatemp::DEFAULT_DAYS;
-    let mut index = 0;
-    while index < args.len() {
-        let arg = args[index].as_str();
-        if cache_flag(arg, args, &mut index)? {
-            continue;
-        }
-        match arg {
-            "--json" => {
-                json = true;
-                index += 1;
-            }
-            "--help" | "-h" => {
-                println!("{USAGE}");
-                return Ok(());
-            }
-            "--days" => {
-                let value = take_value(args, &mut index, arg, "--days")?;
-                days = value.trim().parse().map_err(|_| {
-                    Error::usage(format!("--days must be a whole number, got {value:?}"))
-                })?;
-            }
-            other => {
-                return Err(Error::usage(format!(
-                    "unknown argument for `sea-temp`: {other}"
-                )));
-            }
-        }
-    }
-    let report = seatemp::fetch(days)?;
-    if json {
-        return print_json(&report);
-    }
-    println!(
-        "sea temperature: {:.1} °C on {} ({})",
-        report.latest.celsius, report.latest.date, report.station
-    );
-    if let (Some(mean), Some(min), Some(max)) =
-        (report.mean_celsius, report.min_celsius, report.max_celsius)
-    {
-        println!(
-            "{} days to {}: mean {mean:.1} °C, min {min:.1} °C, max {max:.1} °C ({} readings)",
-            report.days, report.latest.date, report.samples
-        );
-    }
-    println!("\nsource: {}", report.source);
-    Ok(())
 }
