@@ -71,9 +71,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # -latest labels: macos-14 was retired on 2026-11-02 and jobs using it
-          # are terminated, and musl builds do not care about the host OS version.
-          # x86_64-apple-darwin is cross-compiled on the arm64 runner.
+          # Every target except x86_64-apple-darwin is built natively, so no
+          # cross toolchain is involved: macos-latest is arm64, and Linux gets a
+          # native x86_64 runner plus the arm64 runner. -latest labels are used
+          # because macos-14 was retired on 2026-11-02 and terminated jobs.
           - target: aarch64-apple-darwin
             runs-on: macos-latest
           - target: x86_64-apple-darwin
@@ -81,20 +82,29 @@ jobs:
           - target: x86_64-unknown-linux-musl
             runs-on: ubuntu-latest
           - target: aarch64-unknown-linux-musl
-            runs-on: ubuntu-latest
+            runs-on: ubuntu-24.04-arm
     env:
       TAG: ${{ needs.verify.outputs.tag }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
 
+      - name: Install Rust target
+        run: |
+          rustup toolchain install stable --profile minimal --no-self-update
+          rustup target add "${{ matrix.target }}"
+
+      - name: Install musl toolchain
+        if: contains(matrix.target, 'musl')
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y musl-tools
+          mangled="$(printf '%s' '${{ matrix.target }}' | tr '-' '_')"
+          echo "CC_${mangled}=musl-gcc" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_$(printf '%s' "$mangled" | tr '[:lower:]' '[:upper:]')_LINKER=musl-gcc" >> "$GITHUB_ENV"
+
       - name: Build ${{ matrix.target }}
-        uses: houseabsolute/actions-rust-cross@v1
-        with:
-          command: build
-          target: ${{ matrix.target }}
-          args: "--locked --release"
-          strip: true
+        run: cargo build --locked --release --target "${{ matrix.target }}"
 
       - name: Package
         run: |
