@@ -50,6 +50,8 @@ curl -fsSL https://raw.githubusercontent.com/hongkong-ai-labs/hongkong-pollution
 
 ```sh
 cargo install hkpollution --locked
+# or directly from GitHub:
+cargo install --git https://github.com/hongkong-ai-labs/hongkong-pollution-skill --locked
 ```
 
 **Homebrew** (once the tap is published):
