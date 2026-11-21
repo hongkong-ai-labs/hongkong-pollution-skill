@@ -1,0 +1,151 @@
+---
+name: hongkong-pollution-skill
+description: Current Hong Kong AQHI and air quality data, per-station pollution readings, a network pollution summary and HKO weather, via a CLI and an MCP server.
+license: MIT
+---
+
+# Hong Kong pollution and weather
+
+Official Hong Kong air quality and weather data in one binary, `hkpollution`.
+
+## What it gives the agent
+
+- Current AQHI for the 18 EPD monitoring stations, with health-risk band and
+  publish time.
+- Past-24-hour NO2, O3, SO2, CO, PM10 and PM2.5 concentrations per station,
+  in µg/m³.
+- A network summary: worst and mean AQHI, risk-level counts, worst PM2.5 and
+  NO2 stations, and optionally HKO temperature, humidity and warnings.
+- HKO current temperature and humidity readings plus active weather warnings.
+
+All four are available as CLI commands and as four MCP tools.
+
+## Before first use
+
+Run `scripts/ensure-binary.sh` from the skill directory:
+
+```console
+$ bash scripts/ensure-binary.sh
+/Users/you/.local/bin/hkpollution
+```
+
+It prints the absolute path of a working `hkpollution` binary and exits
+non-zero only if it could not download or build one. Use the printed path for
+every later command, for example `BIN="$(bash scripts/ensure-binary.sh)"`, and
+do not assume `hkpollution` is on `PATH`.
+
+It checks, in order: `$HKPOLLUTION_BIN`, `hkpollution` on `PATH`,
+`scripts/install.sh`, then `cargo build --release --locked` in the repo root.
+
+## Commands
+
+| Command | Data |
+| --- | --- |
+| `hkpollution aqhi [--station NAME] [--json]` | Current AQHI per station |
+| `hkpollution pollutants [--station NAME] [--hours 1-24] [--json]` | Hourly NO2/O3/SO2/CO/PM10/PM2.5 per station, with averages |
+| `hkpollution summary [--with-weather] [--json]` | Network rollup, optional HKO weather |
+| `hkpollution weather [--json]` | HKO temperature, humidity and warnings |
+| `hkpollution mcp` | The four datasets as MCP tools over stdio |
+
+`--station` is a case-insensitive substring match; an ambiguous name returns
+every match. `--hours` keeps the newest N hourly readings per station
+(default 1, maximum 24).
+
+One station:
+
+```console
+$ hkpollution aqhi --station "mong kok"
+Station   AQHI  Risk      Published
+--------  ----  --------  ----------------
+Mong Kok  4     Moderate  2026-11-21 17:30
+
+source: EPD Air Quality Health Index (fetched 2026-11-21T18:33:13+08:00)
+```
+
+JSON piped to `jq`:
+
+```console
+$ hkpollution aqhi --station central --json | jq -r '.stations[].station'
+Central/Western
+Central
+```
+
+Summary with weather:
+
+```console
+$ hkpollution summary --with-weather | tail -9
+
+network: worst 4 (Central/Western) / mean 3.9
+risk levels: Low 1, Moderate 17
+worst PM2.5: Causeway Bay 19.6 µg/m³ (2026-11-21 18:00)
+worst NO2: Causeway Bay 102.6 µg/m³ (2026-11-21 18:00)
+weather: 2026-11-21T18:02:00+08:00 temperature 20.0 °C, humidity 47.0 %, warnings: The Fire Danger Warning is Red and the fire risk is extreme.
+
+source: EPD / HKO
+```
+
+## JSON contract
+
+`--json` prints exactly one JSON object on stdout, with no footer, so it is
+safe to pipe to `jq`.
+
+- Timestamps are ISO-8601 in Hong Kong time, with a `+08:00` offset.
+- Concentrations are in µg/m³.
+- A value is `null` when a station does not measure that pollutant; a missing
+  average key means every reading in the window was null.
+
+## MCP server
+
+`hkpollution mcp` speaks JSON-RPC 2.0 over stdio (one JSON object per line,
+protocol revision `2024-11-05`) and exposes four tools:
+
+| Tool | Arguments |
+| --- | --- |
+| `air_quality_aqhi` | `{ "station"?: string }` |
+| `pollutant_concentrations` | `{ "station"?: string, "hours"?: 1-24 }` |
+| `pollution_summary` | `{ "include_weather"?: boolean }` |
+| `hong_kong_weather` | `{}` |
+
+Client configuration, with `command` set to the path printed by
+`scripts/ensure-binary.sh`:
+
+```json
+{
+  "mcpServers": {
+    "hongkong-pollution": {
+      "command": "/absolute/path/printed/by/ensure-binary.sh",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+An upstream failure comes back as a tool result with `isError: true` and a
+readable message rather than a transport error, so the session survives an
+outage.
+
+## Exit codes
+
+| Exit | Meaning |
+| --- | --- |
+| `0` | Success |
+| `1` | Network, upstream or I/O failure, including a `--station` that matches nothing |
+| `2` | Usage error (unknown command or flag, bad `--hours`) |
+
+Errors always go to stderr; stdout stays clean for `--json`.
+
+## Attribution
+
+Data © Government of the Hong Kong Special Administrative Region: the
+Environmental Protection Department (AQHI, pollutant concentrations) and the
+Hong Kong Observatory (weather readings). Keep this attribution when you
+redistribute the data.
+
+## Source and offline builds
+
+The Rust source ships with the skill, so `scripts/ensure-binary.sh` can run
+`cargo build --release --locked` when no prebuilt binary is reachable.
+`scripts/install.sh` follows the same rule, and honors
+`HKPOLLUTION_REPO`, `HKPOLLUTION_VERSION` and `HKPOLLUTION_BIN_DIR`.
+
+MIT licensed.

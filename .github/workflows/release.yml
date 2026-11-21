@@ -1,0 +1,194 @@
+name: Release
+
+# Builds one tarball per target, checks it against Cargo.toml and CHANGELOG.md,
+# then publishes a GitHub release with SHA256SUMS and install instructions.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to publish, e.g. v0.1.0"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  verify:
+    name: verify tag and changelog
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      tag: ${{ steps.meta.outputs.tag }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check tag matches Cargo.toml and CHANGELOG.md
+        id: meta
+        env:
+          TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+        run: |
+          version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')
+          if [ -z "$version" ] || [ "$version" = "null" ]; then
+            echo "could not read the version from cargo metadata" >&2
+            exit 1
+          fi
+          if [ "$TAG" != "v$version" ]; then
+            echo "tag $TAG does not match Cargo.toml version $version (expected v$version)" >&2
+            exit 1
+          fi
+          if ! grep -qF "## [$version]" CHANGELOG.md; then
+            echo "CHANGELOG.md has no '## [$version]' section" >&2
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: build ${{ matrix.target }}
+    needs: verify
+    runs-on: ${{ matrix.runs-on }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            runs-on: macos-14
+          - target: x86_64-apple-darwin
+            runs-on: macos-14
+          - target: x86_64-unknown-linux-musl
+            runs-on: ubuntu-24.04
+          - target: aarch64-unknown-linux-musl
+            runs-on: ubuntu-24.04
+    env:
+      TAG: ${{ needs.verify.outputs.tag }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build ${{ matrix.target }}
+        uses: houseabsolute/actions-rust-cross@v1
+        with:
+          command: build
+          target: ${{ matrix.target }}
+          args: "--locked --release"
+          strip: true
+
+      - name: Package
+        run: |
+          mkdir -p pkg
+          cp "target/${{ matrix.target }}/release/hkpollution" pkg/hkpollution
+          cp LICENSE pkg/LICENSE
+          tar -czf "hkpollution-${TAG}-${{ matrix.target }}.tar.gz" -C pkg hkpollution LICENSE
+
+      - name: Smoke test the packaged binary
+        run: |
+          case "$(uname -s):$(uname -m)" in
+            Darwin:arm64) native=aarch64-apple-darwin ;;
+            Darwin:x86_64) native=x86_64-apple-darwin ;;
+            Linux:x86_64) native=x86_64-unknown-linux-musl ;;
+            Linux:aarch64 | Linux:arm64) native=aarch64-unknown-linux-musl ;;
+            *) native="" ;;
+          esac
+          if [ "$native" != "${{ matrix.target }}" ]; then
+            echo "${{ matrix.target }} is not native to this runner; skipping the smoke test"
+            exit 0
+          fi
+          mkdir -p smoke
+          tar -xzf "hkpollution-${TAG}-${{ matrix.target }}.tar.gz" -C smoke
+          ./smoke/hkpollution --version
+
+      - name: Upload tarball
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: hkpollution-*.tar.gz
+          if-no-files-found: error
+
+  release:
+    name: publish release
+    needs: [verify, build]
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ needs.verify.outputs.tag }}
+      VERSION: ${{ needs.verify.outputs.version }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download tarballs
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Write SHA256SUMS
+        run: |
+          cd dist
+          shasum -a 256 ./*.tar.gz | awk '{ file = $2; sub(/^\.\//, "", file); print $1 "  " file }' | sort -k2 > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Build release notes
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import os
+
+          version = os.environ["VERSION"]
+          lines = Path("CHANGELOG.md").read_text(encoding="utf-8").splitlines()
+          start = next((i for i, line in enumerate(lines) if line.startswith(f"## [{version}]")), None)
+          if start is None:
+              raise SystemExit(f"CHANGELOG.md has no ## [{version}] section")
+          section = [lines[start]]
+          for line in lines[start + 1:]:
+              if line.startswith("## ["):
+                  break
+              section.append(line)
+          body = "\n".join(section).strip() + "\n"
+          Path("section.md").write_text(body, encoding="utf-8")
+          PY
+
+          cat > markers.md <<'EOF'
+          ## Install
+
+          ```sh
+          curl -fsSL https://raw.githubusercontent.com/hongkong-ai-labs/hongkong-pollution-skill/main/scripts/install.sh | sh
+          ```
+
+          Or add it as an agent skill:
+
+          ```sh
+          npx skills add hongkong-ai-labs/hongkong-pollution-skill
+          ```
+          EOF
+
+          if [ -s section.md ]; then
+            { cat section.md; printf '\n'; cat markers.md; } > notes.md
+            echo "notes: changelog section for $VERSION plus install markers"
+          else
+            echo "notes: no changelog section for $VERSION, GitHub will generate them" >&2
+          fi
+
+      - name: Publish
+        run: |
+          if [ -s notes.md ]; then
+            gh release create "$TAG" dist/*.tar.gz dist/SHA256SUMS \
+              --title "$TAG" --notes-file notes.md --verify-tag
+          else
+            # No changelog section: let GitHub generate the notes from commits.
+            gh release create "$TAG" dist/*.tar.gz dist/SHA256SUMS \
+              --title "$TAG" --generate-notes --verify-tag
+          fi
