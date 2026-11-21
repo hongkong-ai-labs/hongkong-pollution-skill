@@ -27,6 +27,8 @@ pub enum Error {
     /// A `--station` filter matched none of the known stations; the CLI exits
     /// with status 1.
     NoMatch(String),
+    /// A self-update step failed.
+    Update(String),
 }
 
 impl Error {
@@ -71,6 +73,7 @@ impl fmt::Display for Error {
             Self::Json(error) => write!(formatter, "JSON error: {error}"),
             Self::Usage(message) => write!(formatter, "{message}"),
             Self::NoMatch(message) => write!(formatter, "{message}"),
+            Self::Update(message) => write!(formatter, "update failed: {message}"),
         }
     }
 }

@@ -11,7 +11,10 @@ use serde_json::{Value, json};
 use crate::advice::{self, Lang};
 use crate::error::{Error, Result};
 use crate::model::resolve_station;
-use crate::{VERSION, aqhi, brief, doctor, epd_app, http, pollutants, praise, weather};
+use crate::{
+    VERSION, aqhi, brief, digest, doctor, epd_app, http, pollutants, praise, radiation, redtide,
+    stats, uv, water, weather,
+};
 
 /// Newest MCP protocol revision this server implements.
 pub const PROTOCOL_VERSION: &str = "2025-06-18";
@@ -314,9 +317,142 @@ fn tools_list() -> Value {
                 }
             },
             {
+                "name": "water_quality",
+                "description": "EPD monthly river or marine water quality: dissolved oxygen \
+                                and BOD5 per station, newest sampling month first. Not live.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "kind": {
+                            "type": "string",
+                            "enum": ["river", "marine"],
+                            "description": "Which network to read (default river)."
+                        },
+                        "zone": {
+                            "type": "string",
+                            "description": "Water control zone substring, e.g. \"Deep Bay\"."
+                        },
+                        "station": {
+                            "type": "string",
+                            "description": "Station code or river name substring."
+                        },
+                        "months": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 60,
+                            "description": "Months kept per station (default 6)."
+                        }
+                    },
+                    "additionalProperties": false
+                }
+            },
+            {
+                "name": "red_tide",
+                "description": "AFCD red tide sightings: active reports and those within a \
+                                recent window, optionally sorted by distance from a coordinate.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "days": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 3650,
+                            "description": "Recent window in days (default 90)."
+                        },
+                        "active": {
+                            "type": "boolean",
+                            "description": "Keep only sightings with no dissipation date."
+                        },
+                        "lat": {
+                            "type": "number",
+                            "description": "Latitude in Hong Kong; with lng, sort by distance."
+                        },
+                        "lng": {
+                            "type": "number",
+                            "description": "Longitude in Hong Kong; with lat, sort by distance."
+                        }
+                    },
+                    "additionalProperties": false
+                }
+            },
+            {
+                "name": "radiation_level",
+                "description": "HKO hourly ambient gamma radiation dose rate per station, \
+                                in microsievert per hour, with each reading relative to the \
+                                network median.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "station": {
+                            "type": "string",
+                            "description": "Station name substring, e.g. \"Tap Mun\"."
+                        }
+                    },
+                    "additionalProperties": false
+                }
+            },
+            {
+                "name": "uv_index",
+                "description": "HKO latest 15-minute mean UV index with the WHO exposure band.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": false
+                }
+            },
+            {
+                "name": "air_quality_stats",
+                "description": "AQHI statistics over a window: min, max, mean and hours at or \
+                                above a threshold per station, from a local observation log \
+                                topped up by the documented 24-hour feed.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "days": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 365,
+                            "description": "Window in days (default 30)."
+                        },
+                        "station": {
+                            "type": "string",
+                            "description": "Station substring."
+                        },
+                        "threshold": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 11,
+                            "description": "Exceedance threshold (default 7)."
+                        }
+                    },
+                    "additionalProperties": false
+                }
+            },
+            {
+                "name": "station_comparison",
+                "description": "Current AQHI ranked across stations, separated into general \
+                                and roadside means so the comparison is fair.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": false
+                }
+            },
+            {
+                "name": "environment_digest",
+                "description": "One line per Hong Kong environmental source (air, beach, red \
+                                tide, radiation, river, UV, warnings); each part degrades \
+                                independently.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": false
+                }
+            },
+            {
                 "name": "source_health",
-                "description": "Probe every upstream source once and report latency, failures \
-                                and schema mismatches, plus cache statistics.",
+                "description": "Probe every upstream source once and report latency, failures, \
+                                schema mismatches and stale payloads, plus cache statistics.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {},
@@ -372,6 +508,13 @@ fn call_tool(id: Option<Value>, params: Option<&Value>) -> Value {
         "street_level_aqhi" => tool_street(&arguments),
         "air_quality_briefing" => tool_brief(&arguments),
         "health_advice" => tool_advice(&arguments),
+        "water_quality" => tool_water(&arguments),
+        "red_tide" => tool_red_tide(&arguments),
+        "radiation_level" => tool_radiation(&arguments),
+        "uv_index" => tool_uv(),
+        "air_quality_stats" => tool_stats(&arguments),
+        "station_comparison" => tool_compare(),
+        "environment_digest" => serde_json::to_value(digest::build()).map_err(Error::from),
         "source_health" => tool_source_health(),
         other => {
             return error_response(id, INVALID_PARAMS, &format!("unknown tool: {other}"));
@@ -507,6 +650,91 @@ fn tool_beach(arguments: &Value) -> Result<Value> {
         _ => return Err(Error::usage("lat and lng must be given together")),
     }
     Ok(serde_json::to_value(&report)?)
+}
+
+fn tool_water(arguments: &Value) -> Result<Value> {
+    let kind = match arguments.get("kind").and_then(Value::as_str) {
+        None => water::Kind::River,
+        Some(value) => water::Kind::parse(value)?,
+    };
+    let months = match arguments.get("months") {
+        None | Some(Value::Null) => 6,
+        Some(value) => value
+            .as_u64()
+            .and_then(|raw| u32::try_from(raw).ok())
+            .ok_or_else(|| Error::usage("months must be an integer between 1 and 60"))?,
+    };
+    let mut report = water::fetch(kind, months)?;
+    if let Some(zone) = arguments.get("zone").and_then(Value::as_str) {
+        water::retain_zone(&mut report, zone);
+    }
+    if let Some(query) = arguments.get("station").and_then(Value::as_str) {
+        water::retain_query(&mut report, query);
+    }
+    Ok(serde_json::to_value(&report)?)
+}
+
+fn tool_red_tide(arguments: &Value) -> Result<Value> {
+    let days = match arguments.get("days") {
+        None | Some(Value::Null) => redtide::DEFAULT_DAYS,
+        Some(value) => value
+            .as_u64()
+            .and_then(|raw| u32::try_from(raw).ok())
+            .ok_or_else(|| Error::usage("days must be an integer between 1 and 3650"))?,
+    };
+    let mut report = redtide::fetch(days)?;
+    if arguments
+        .get("active")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        redtide::retain_active(&mut report);
+    }
+    match (
+        arguments.get("lat").and_then(Value::as_f64),
+        arguments.get("lng").and_then(Value::as_f64),
+    ) {
+        (Some(lat), Some(lng)) => redtide::sort_by_distance(&mut report, lat, lng),
+        (None, None) => {}
+        _ => return Err(Error::usage("lat and lng must be given together")),
+    }
+    Ok(serde_json::to_value(&report)?)
+}
+
+fn tool_radiation(arguments: &Value) -> Result<Value> {
+    let mut report = radiation::fetch()?;
+    if let Some(query) = arguments.get("station").and_then(Value::as_str) {
+        radiation::retain_query(&mut report, query);
+    }
+    Ok(serde_json::to_value(&report)?)
+}
+
+fn tool_uv() -> Result<Value> {
+    Ok(serde_json::to_value(uv::fetch()?)?)
+}
+
+fn tool_stats(arguments: &Value) -> Result<Value> {
+    let days = match arguments.get("days") {
+        None | Some(Value::Null) => 30,
+        Some(value) => value
+            .as_u64()
+            .and_then(|raw| u32::try_from(raw).ok())
+            .ok_or_else(|| Error::usage("days must be an integer between 1 and 365"))?,
+    };
+    let threshold = match arguments.get("threshold") {
+        None | Some(Value::Null) => stats::DEFAULT_THRESHOLD,
+        Some(value) => value
+            .as_i64()
+            .ok_or_else(|| Error::usage("threshold must be an integer between 1 and 11"))?,
+    };
+    let station = arguments.get("station").and_then(Value::as_str);
+    Ok(serde_json::to_value(stats::build(
+        days, station, threshold,
+    )?)?)
+}
+
+fn tool_compare() -> Result<Value> {
+    Ok(serde_json::to_value(stats::compare()?)?)
 }
 
 fn tool_forecast() -> Result<Value> {

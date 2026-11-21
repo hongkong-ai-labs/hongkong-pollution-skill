@@ -81,6 +81,12 @@ $ hkpollution --version
 hkpollution 0.3.0
 ```
 
+## Self-update
+
+`hkpollution update --check` reports the current version, latest release and
+the detected install method. `hkpollution update` updates with that same
+method: cargo install, the release installer, a source rebuild or Homebrew.
+
 ## What you get
 
 | Command | Data | Output |
@@ -95,6 +101,14 @@ hkpollution 0.3.0
 | `hkpollution advice` | Official EPD precautionary actions per AQHI risk band, English and/or Chinese | table or `--json` |
 | `hkpollution brief` | One call for a coordinate: place, street AQHI, nearest station, weather and advice | report or `--json` |
 | `hkpollution beach` | EPD beach grading (grade, status, district, WGS84 point) joined to published E. coli monitoring: latest count, five recent samples, geometric mean; `--near` sorts by distance | table or `--json` |
+| `hkpollution river` | EPD monthly river water quality: dissolved oxygen and BOD5 per station, newest sampling month | table or `--json` |
+| `hkpollution marine` | EPD monthly marine water quality, same shape without the river name | table or `--json` |
+| `hkpollution red-tide` | AFCD red tide sightings, active and recent, with WGS84 points and distance sorting | table or `--json` |
+| `hkpollution radiation` | HKO hourly ambient gamma dose rate per station, relative to the network median | table or `--json` |
+| `hkpollution uv` | HKO UV index with the WHO exposure band | report or `--json` |
+| `hkpollution stats` | AQHI min/max/mean and exceedance hours per station over 1-365 days | table or `--json` |
+| `hkpollution compare` | Current AQHI ranked, with general and roadside means kept apart | table or `--json` |
+| `hkpollution digest` | One line per source for a cron job or morning check | report or `--json` |
 | `hkpollution map` | PRAISE-HK raster tile link for a bounding box | report or `--json` |
 | `hkpollution about` | The app's about pages, privacy policy and long-term air quality links | report or `--json` |
 | `hkpollution mcp` | All of the above as MCP tools over stdio | JSON-RPC |
@@ -292,6 +306,64 @@ failing. Quote `latest_sampled_on` whenever you cite a count, and note EPD's
 advice against swimming for up to three days after a tropical cyclone or
 heavy rain.
 
+### Beyond air
+
+Four more datasets answer questions air quality cannot:
+
+```console
+$ hkpollution red-tide --days 365 --near 22.23,114.17
+REPORTED    LOCATION                              SPECIES               STATUS  DISSIPATED  DIST
+----------  ------------------------------------  --------------------  ------  ----------  ----
+2026-08-18  Repulse Bay Beach, Hong Kong Island   Phaeocystis globosa           2026-08-19  2.9 km
+
+$ hkpollution radiation
+STATION         µSv/H  VS MEDIAN  LEVEL    TIME
+--------------  -----  ---------  -------  -------------------------
+King's Park     0.15   1.36x      typical  2026-11-22T01:00:00+08:00
+
+$ hkpollution river --zone "Deep Bay" --months 2
+ZONE      RIVER             STATION  MONTH    DO mg/L  BOD5 mg/L
+--------  ----------------  -------  -------  -------  ---------
+Deep Bay  River Ganges      GR1      2026-10  6.0      19.0
+```
+
+`river` and `marine` are **monthly monitoring**, not live: every row names its
+sampling month and the report names the newest one it holds. An `active` red
+tide is a sighting with no dissipation date yet. Radiation `elevated` means
+more than twice the network median, which is a data signal rather than a
+health threshold.
+
+`digest` runs the lot in one call and never fails: each source is a line, and a
+broken upstream becomes `unavailable: <reason>`.
+
+```console
+$ hkpollution digest
+air        worst AQHI 4 at Central/Western (Moderate), network mean 3.5
+beach      11 graded, 11 open, 32 not graded, E. coli 2025
+red tide   no active sightings; 1 reported in the last 90 days
+radiation  11 stations, median 0.11 µSv/h, max 0.15 µSv/h at King's Park
+river      13 stations, newest sampling month 2026-10 (EPD monthly)
+uv         index 0.0 (low), observed 2026-11-21T18:00:00+08:00
+weather    no active warnings
+```
+
+### Statistics and comparison
+
+`stats` keeps a local observation log (one line per station-hour, 90 days) in
+the cache directory, topped up by the documented 24-hour AQHI feed, so a fresh
+install is already useful and coverage grows with every call. `compare` keeps
+general and roadside stations apart, because ranking a roadside kerb against a
+background station is not a fair comparison.
+
+```console
+$ hkpollution compare | head -5
+STATION          CATEGORY  AQHI  RISK      VS CATEGORY
+---------------  --------  ----  --------  -----------
+Causeway Bay     roadside  4     Moderate  +0.0
+Central          roadside  4     Moderate  +0.0
+Central/Western  general   4     Moderate  +0.6
+```
+
 ## Reliability
 
 Built for agents that call the same tool in a loop, and for cron jobs that need a
@@ -300,10 +372,11 @@ verdict rather than prose.
 | Concern | Behaviour |
 | --- | --- |
 | Repeat calls | On-disk TTL cache in `~/.cache/hkpollution`: 5 min for current readings, 15 min for forecasts, 30 min for station history, 24 h for static pages. `--no-cache`, `--max-age <secs>`, `--refresh` |
+| Expired entries | Revalidated with `If-Modified-Since`; a `304` restarts the window without a rewrite, and a network failure serves the stale body instead of failing |
 | Flaky upstreams | Up to 3 attempts with 300 ms / 900 ms backoff for transport errors, 5xx and 429, honouring `Retry-After` |
 | Thresholds | `--fail-above 7` exits `3` when the worst AQHI reaches it, so `hkpollution aqhi --fail-above 7` is a monitoring check with no parsing |
 | Needing a station name | `--near 22.3375,114.263` resolves to the nearest of the 18 stations and prints the distance |
-| Drift and outages | `hkpollution doctor` probes all eleven sources, reports latency and a schema check, and prints the cache location and size |
+| Drift and outages | `hkpollution doctor` probes all seventeen sources, reports latency, a schema check and the age of the newest data in each payload (flagging `stale`), and prints the cache location and size |
 | Tuning | `HKPOLLUTION_CACHE_DIR`, `HKPOLLUTION_TIMEOUT_SECS`, `HKPOLLUTION_RETRIES` |
 
 ```console
@@ -317,12 +390,18 @@ HKO rhrread             ok      31   2951 bytes
 HKO fnd                 ok      33   4364 bytes
 EPD app forecast        ok      63   699 bytes
 EPD app monitors        ok      29   3960 bytes
-PRAISE weather          ok      74   47 bytes
-PRAISE pollutant_index  ok      607  13131 bytes
-EPD beach grading       ok      118  11275 bytes
-EPD beach E. coli       ok      96   54866 bytes
+PRAISE weather          ok      74   47 bytes, data 0.0 h old
+PRAISE pollutant_index  ok      607  13111 bytes, data 0.0 h old
+EPD beach grading       ok      530  11643 bytes
+EPD beach E. coli       ok      335  54863 bytes
+EPD river water quality ok      262  19644 bytes
+EPD marine water quality ok     54   10798 bytes
+EPD 24-hour AQHI        ok      47   62712 bytes, data 0.3 h old
+HKO UV index            ok      34   56 bytes, data 0.3 h old
+HKO radiation           ok      35   413 bytes, data 0.8 h old
+AFCD red tide           ok      1216 266998 bytes, data 0.0 h old
 
-summary: 11 ok, 0 failed
+summary: 17 ok, 0 stale, 0 failed
 ```
 
 ## MCP server
@@ -396,6 +475,12 @@ server keeps serving until stdin closes.
 | PRAISE-HK spatial tiles | `https://praise-web.ust.hk:8443/api/pollutant_spatial_tiles` | Raster tile links in `map` |
 | EPD beach grading (GeoJSON) | `https://cd.epic.epd.gov.hk/EPICDI/json/beach/beachgrading?lang=en` | Grade, status, district and a WGS84 point per gazetted beach |
 | EPD beach E. coli monitoring (CSV, yearly) | `https://cd.epic.epd.gov.hk/beachpsi/en/beach-historical-data-<year>-en.csv` | E. coli count per 100 mL per sampling date, from the latest complete year |
+| EPD recent river water quality (CSV) | `https://cd.epic.epd.gov.hk/riverpsi/en/riverrecent/river-recent-en.csv` | Monthly dissolved oxygen and BOD5 per river station |
+| EPD recent marine water quality (CSV) | `https://cd.epic.epd.gov.hk/marinepsi/en/marinerecent/marine-recent-en.csv` | Monthly dissolved oxygen and BOD5 per marine station |
+| EPD past 24-hour AQHI (XML, documented) | `https://www.aqhi.gov.hk/epd/ddata/html/out/24aqhi_Eng.xml` | `history` fallback and the first run of `stats` |
+| AFCD red tide sightings (CSV) | `https://redtide.afcd.gov.hk/data/RTMS_ob_RTLE.csv` | Active and recent red tides with coordinates |
+| HKO ambient gamma radiation (CSV) | `https://data.weather.gov.hk/weatherAPI/hko_data/regional-weather/latest_hourly_rmn.csv` | Hourly mean dose rate per station, µSv/h |
+| HKO UV index (CSV) | `https://data.weather.gov.hk/weatherAPI/hko_data/regional-weather/latest_15min_uvindex.csv` | 15-minute mean UV index |
 
 A `source` of `EPD app API` or `PRAISE-HK` marks a report from one of those
 undocumented app APIs; `EPD` and `HKO` keep their existing meaning.

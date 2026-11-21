@@ -8,6 +8,31 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `river` and `marine`: EPD monthly water quality (dissolved oxygen and BOD5)
+  per station, with `--zone`, `--station`, `--months` and the sampling month
+  named in every report so it is never read as live data.
+- `red-tide`: AFCD red tide sightings since 1975, with `--active` for reports
+  that have no dissipation date yet, `--days` for the recent window and
+  `--near` for distance sorting.
+- `radiation`: HKO hourly ambient gamma dose rate per station in µSv/h, with
+  each reading relative to the network median and an `elevated` flag above
+  twice that median.
+- `uv`: HKO UV index with the WHO exposure band, also added to `weather` and
+  to the `brief` payload and table.
+- `stats`: AQHI min, max, mean and hours at or above `--threshold` per station
+  over 1-365 days, from a local observation log in the cache directory topped
+  up by the documented 24-hour feed.
+- `compare`: current AQHI ranked across stations with general and roadside
+  means kept apart.
+- `digest`: one line per source (air, beach, red tide, radiation, river, UV,
+  warnings), each degrading to `unavailable` independently.
+- `brief` now also carries `uv`, the nearest `beach` (grade, status and latest
+  E. coli sample) and `red_tide` within ten kilometres.
+- `history` falls back to the documented past-24-hour AQHI XML when the app
+  API is unavailable, keeping the same schema with pollutant fields null.
+- `doctor` probes all seventeen sources and reports the age of the newest
+  timestamp in each payload, flagging `stale` when a feed keeps answering with
+  old data; the summary now counts `ok`, `stale` and `failed` separately.
 - `beach` joins EPD's yearly E. coli monitoring file to the grading feed, so
   each beach now carries `ecoli`: the latest count per 100 mL, its sampling
   date, the five most recent samples and their geometric mean — the same
@@ -23,6 +48,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Expired cache entries are revalidated with `If-Modified-Since`; a `304`
+  restarts the freshness window without rewriting the body, and a transport
+  failure serves the stale body instead of failing the command.
 - `beach` reads `beachgrading` (real WGS84 geometry) instead of
   `beachgrading_GeoXY`, whose published points were far outside the territory;
   a point outside the Hong Kong bounds is dropped rather than reported.

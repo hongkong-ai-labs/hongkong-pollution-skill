@@ -62,17 +62,57 @@ pub fn read(url: &str, ttl_secs: u64) -> Option<String> {
     if ttl_secs == 0 {
         return None;
     }
+    let (body, stored_at) = read_stored(url)?;
+    let age = now_unix().saturating_sub(stored_at);
+    if age < 0 || age as u64 > ttl_secs {
+        return None;
+    }
+    Some(body)
+}
+
+/// Read a cached body regardless of age, with the time it was stored.
+#[must_use]
+pub fn read_stored(url: &str) -> Option<(String, i64)> {
     let path = path_for(url)?;
     let raw = std::fs::read_to_string(path).ok()?;
     let envelope: Envelope = serde_json::from_str(&raw).ok()?;
     if envelope.url != url {
         return None;
     }
-    let age = now_unix().saturating_sub(envelope.stored_at);
-    if age < 0 || age as u64 > ttl_secs {
-        return None;
+    Some((envelope.body, envelope.stored_at))
+}
+
+/// Mark an entry as just validated, keeping its body.
+///
+/// Used after a `304 Not Modified`, so the body is served without a rewrite and
+/// the freshness window restarts.
+pub fn touch(url: &str) {
+    let Some((body, _)) = read_stored(url) else {
+        return;
+    };
+    let Some(dir) = dir() else {
+        return;
+    };
+    let envelope = Envelope {
+        url: url.to_string(),
+        stored_at: now_unix(),
+        body,
+    };
+    let Ok(encoded) = serde_json::to_string(&envelope) else {
+        return;
+    };
+    let Some(path) = path_for(url) else {
+        return;
+    };
+    if std::fs::create_dir_all(&dir).is_err() {
+        return;
     }
-    Some(envelope.body)
+    let temporary = path.with_extension(format!("tmp{}", std::process::id()));
+    if std::fs::write(&temporary, encoded).is_ok() {
+        let _ = std::fs::rename(&temporary, &path);
+    } else {
+        let _ = std::fs::remove_file(&temporary);
+    }
 }
 
 /// Store `body` for `url`, ignoring every failure.
@@ -161,6 +201,12 @@ mod tests {
         assert_eq!(read(url, 60).as_deref(), Some("{\"ok\":true}"));
         assert!(read(url, 0).is_none(), "a zero TTL must never hit");
         assert!(super::stats().0 >= 1);
+        assert_eq!(
+            super::read_stored(url).map(|(body, _)| body),
+            Some("{\"ok\":true}".to_string())
+        );
+        super::touch(url);
+        assert_eq!(read(url, 60).as_deref(), Some("{\"ok\":true}"));
 
         let (count, bytes) = super::stats();
         assert!(count >= 1 && bytes > 0);

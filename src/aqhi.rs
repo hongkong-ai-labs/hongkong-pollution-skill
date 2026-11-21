@@ -42,6 +42,9 @@ pub fn fetch() -> Result<AqhiReport> {
             })?
         }
     };
+    // Keep a local observation log for `stats`; this is best-effort and never
+    // changes the report.
+    crate::store::record(&stations, crate::now_unix_seconds());
     Ok(AqhiReport {
         stations,
         source: "EPD".to_string(),

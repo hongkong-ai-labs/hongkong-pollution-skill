@@ -462,6 +462,113 @@ fn hko_warnings(root: &Value) -> Vec<String> {
     warnings
 }
 
+/// Newest timestamp embedded in a feed body, as Unix seconds.
+///
+/// `doctor` uses this to notice an upstream that keeps answering `200` with
+/// frozen data: it reads `<lastBuildDate>`/`<pubDate>`, then the newest ISO-8601
+/// instant, then compact `YYYYMMDDHH[MM]` stamps such as the HKO CSV files.
+#[must_use]
+pub fn latest_timestamp(body: &str) -> Option<i64> {
+    let tagged = inner_text(body, "lastBuildDate")
+        .or_else(|| inner_text(body, "pubDate"))
+        .and_then(rfc2822_to_iso)
+        .and_then(|iso| unix_from_iso(&iso));
+    let scanned = scan_timestamps(body).max();
+    match (tagged, scanned) {
+        (Some(a), Some(b)) => Some(a.max(b)),
+        (tagged, scanned) => tagged.or(scanned),
+    }
+}
+
+/// Every recognisable timestamp in `body`, as Unix seconds.
+fn scan_timestamps(body: &str) -> impl Iterator<Item = i64> + '_ {
+    let bytes = body.as_bytes();
+    let mut found = Vec::new();
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index].is_ascii_digit() && (index == 0 || !bytes[index - 1].is_ascii_digit()) {
+            let mut end = index;
+            while end < bytes.len() && bytes[end].is_ascii_digit() {
+                end += 1;
+            }
+            let run = &body[index..end];
+            if let Some(unix) = compact_stamp(run) {
+                found.push(unix);
+            }
+            index = end;
+            continue;
+        }
+        index += 1;
+    }
+    // ISO instants: `YYYY-MM-DDTHH:MM`.
+    let mut rest = body;
+    let mut offset = 0;
+    while let Some(position) = rest.find("T") {
+        let start = offset + position;
+        if start >= 10 && body.is_char_boundary(start - 10) {
+            // Include a trailing offset when the body carries one.
+            let end = (start + 12).min(body.len());
+            let end = (start..=end)
+                .rev()
+                .find(|edge| body.is_char_boundary(*edge))
+                .unwrap_or(start);
+            let candidate = &body[start - 10..end];
+            if let Some(unix) = unix_from_iso(candidate) {
+                found.push(unix);
+            }
+        }
+        offset = start + 1;
+        rest = &body[offset..];
+    }
+    found.into_iter()
+}
+
+/// `YYYYMMDDHH` or `YYYYMMDDHHMM` to Unix seconds (Hong Kong time).
+fn compact_stamp(run: &str) -> Option<i64> {
+    if !matches!(run.len(), 10 | 12 | 14) {
+        return None;
+    }
+    let year: i64 = run.get(0..4)?.parse().ok()?;
+    let month: u32 = run.get(4..6)?.parse().ok()?;
+    let day: u32 = run.get(6..8)?.parse().ok()?;
+    let hour: i64 = run.get(8..10)?.parse().ok()?;
+    let minute: i64 = run.get(10..12).map_or(Some(0), |raw| raw.parse().ok())?;
+    if !(1..=12).contains(&month) || !(1..=31).contains(&day) || hour > 23 || minute > 59 {
+        return None;
+    }
+    Some(crate::days_from_civil(year, month, day) * 86_400 + hour * 3_600 + minute * 60 - 8 * 3_600)
+}
+
+/// ISO-8601 with an offset to Unix seconds.
+fn unix_from_iso(iso: &str) -> Option<i64> {
+    let iso = iso.trim();
+    let (date, rest) = iso.split_once('T')?;
+    let days = crate::days_from_iso(date)?;
+    let hour: i64 = rest.get(0..2)?.parse().ok()?;
+    let minute: i64 = rest.get(3..5).map_or(Some(0), |raw| raw.parse().ok())?;
+    // These are Hong Kong feeds, so a missing offset means +08:00.
+    let offset = if let Some(position) = rest.find(['+', '-']) {
+        let tail = &rest[position..];
+        let sign: i64 = if tail.starts_with('-') { -1 } else { 1 };
+        let digits = tail.get(1..).unwrap_or_default();
+        let (hours, minutes) = if let Some((hours, minutes)) = digits.split_once(':') {
+            (hours, minutes)
+        } else if digits.len() >= 4 {
+            (&digits[0..2], &digits[2..4])
+        } else {
+            (digits, "0")
+        };
+        let hours: i64 = hours.parse().map_err(|_| ()).ok()?;
+        let minutes: i64 = minutes.parse().unwrap_or(0);
+        sign * (hours * 3_600 + minutes * 60)
+    } else if rest.contains('Z') {
+        0
+    } else {
+        8 * 3_600
+    };
+    Some(days * 86_400 + hour * 3_600 + minute * 60 - offset)
+}
+
 /// Remove HTML tags and collapse runs of whitespace.
 ///
 /// HKO warnings and the app API health advice both arrive as small HTML
@@ -1046,4 +1153,29 @@ pub fn parse_abouts_json(input: &str) -> Result<Vec<AboutSection>> {
         return Err(Error::parse("abouts JSON: no sections found"));
     }
     Ok(sections)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::latest_timestamp;
+
+    #[test]
+    fn reads_tagged_dates() {
+        let body = "<rss><channel><lastBuildDate>Sun, 22 Nov 2026 01:30:00 +0800</lastBuildDate></channel></rss>";
+        assert_eq!(latest_timestamp(body), Some(1_795_282_200));
+    }
+
+    #[test]
+    fn reads_compact_and_iso_stamps() {
+        let unix = 1_795_280_400;
+        assert_eq!(
+            latest_timestamp("Date time,Value\n2026112201,0.09"),
+            Some(unix)
+        );
+        assert_eq!(
+            latest_timestamp(r#"{"time":"2026-11-22T01:00:00+08:00"}"#),
+            Some(unix)
+        );
+        assert_eq!(latest_timestamp("no dates here"), None);
+    }
 }

@@ -127,15 +127,22 @@ fn mcp_answers_initialize_tools_list_ping_and_unknown_methods() {
         vec![
             "air_quality_aqhi",
             "air_quality_briefing",
+            "air_quality_stats",
             "aqhi_forecast",
             "beach_water_quality",
+            "environment_digest",
             "health_advice",
             "hong_kong_weather",
             "pollutant_concentrations",
             "pollution_summary",
+            "radiation_level",
+            "red_tide",
             "source_health",
+            "station_comparison",
             "station_history",
-            "street_level_aqhi"
+            "street_level_aqhi",
+            "uv_index",
+            "water_quality"
         ]
     );
     for tool in tools {

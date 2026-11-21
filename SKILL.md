@@ -27,6 +27,18 @@ Official Hong Kong air quality and weather data in one binary, `hkpollution`.
 - Published E. coli monitoring for each beach: latest count per 100 mL, its
   sampling date, the five most recent samples, and the geometric mean of those
   five — the same figure EPD grades on.
+- EPD monthly river and marine water quality (dissolved oxygen and BOD5 per
+  station), with the sampling month named so nobody mistakes it for live data.
+- AFCD red tide sightings back to 1975: active reports (no dissipation date)
+  and recent ones, with WGS84 points and distance sorting.
+- HKO hourly ambient gamma radiation per station in µSv/h, plus each station
+  relative to the network median.
+- HKO UV index with the WHO exposure band, also folded into `weather` and
+  `brief`.
+- AQHI statistics over 1-365 days (min, max, mean, hours above a threshold)
+  from a local observation log topped up by the documented 24-hour feed, and a
+  `compare` ranking that separates general from roadside stations.
+- `digest`: one line per source for a cron job or morning check.
 
 All of these are available as CLI commands and as MCP tools. The forecast and
 history commands come from app APIs that the upstream mobile apps use; reports
@@ -61,10 +73,19 @@ It checks, in order: `$HKPOLLUTION_BIN`, `hkpollution` on `PATH`,
 | `hkpollution summary [--with-weather] [--json]` | Network rollup, optional HKO weather |
 | `hkpollution weather [--forecast] [--json]` | HKO temperature, humidity and warnings, plus the nine-day forecast |
 | `hkpollution beach [--name TEXT] [--district TEXT] [--grade BAND] [--near LAT,LNG] [--json]` | EPD beach grading plus E. coli history |
+| `hkpollution river [--zone TEXT] [--station TEXT] [--months 1-60] [--json]` | EPD monthly river water quality |
+| `hkpollution marine [--zone TEXT] [--station TEXT] [--months 1-60] [--json]` | EPD monthly marine water quality |
+| `hkpollution red-tide [--days 1-3650] [--active] [--near LAT,LNG] [--json]` | AFCD red tide sightings |
+| `hkpollution radiation [--station TEXT] [--json]` | HKO ambient gamma dose rate |
+| `hkpollution uv [--json]` | HKO UV index and band |
+| `hkpollution stats [--days 1-365] [--station TEXT] [--threshold 1-11] [--json]` | AQHI statistics over time |
+| `hkpollution compare [--json]` | Current AQHI ranked, general vs roadside |
+| `hkpollution digest [--json]` | One line per source |
 | `hkpollution advice [--risk BAND] [--lang en\|tc\|both] [--json]` | Official EPD precautionary actions per AQHI band |
 | `hkpollution brief --lat L --lng L [--json]` | Place name, street AQHI, nearest station, weather and advice in one call |
 | `hkpollution map --bbox lat0,lng0,lat1,lng1 [--json]` | PRAISE-HK raster tile link for a bounding box |
 | `hkpollution about [--json]` | The app's about pages |
+| `hkpollution update [--check] [--force]` | Self-update using the detected install method |
 | `hkpollution mcp` | Every dataset above as MCP tools over stdio |
 
 `--station` is a case-insensitive substring match; an ambiguous name returns
@@ -94,6 +115,16 @@ names the file used and `ecoli_error` says why it is missing; a missing E. coli
 block never fails the command. Quote `latest_sampled_on` whenever you cite a
 count, and remember EPD advises against swimming for up to three days after
 a tropical cyclone or heavy rain.
+
+`river`/`marine` are **monthly monitoring**, not live readings: the table names
+each station's newest sampling month, and `--months` keeps 1-60 of them per
+station (default 6) with `mean_dissolved_oxygen_mg_l` and `mean_bod5_mg_l` over
+that window. Red tide reports are historical: an `active` sighting is one with
+no dissipation date yet, and `--days` bounds the recent window (default 90).
+Radiation `level: elevated` means more than twice the network median — a data
+signal, not a health threshold. `stats` keeps a local log in the cache
+directory (90 days, one line per station-hour) that grows with every call, so a
+fresh install starts with the documented 24-hour feed and improves from there.
 
 One station:
 
@@ -150,6 +181,13 @@ protocol revision `2024-11-05`) and exposes these tools:
 | `pollution_summary` | `{ "include_weather"?: boolean }` |
 | `hong_kong_weather` | `{}` |
 | `beach_water_quality` | `{ "name"?: string, "district"?: string, "grade"?: string, "lat"?: number, "lng"?: number }` |
+| `water_quality` | `{ "kind"?: "river"\|"marine", "zone"?: string, "station"?: string, "months"?: 1-60 }` |
+| `red_tide` | `{ "days"?: 1-3650, "active"?: boolean, "lat"?: number, "lng"?: number }` |
+| `radiation_level` | `{ "station"?: string }` |
+| `uv_index` | `{}` |
+| `air_quality_stats` | `{ "days"?: 1-365, "station"?: string, "threshold"?: 1-11 }` |
+| `station_comparison` | `{}` |
+| `environment_digest` | `{}` |
 | `air_quality_briefing` | `{ "lat": number, "lng": number, "no_cache"?: boolean }` |
 | `health_advice` | `{ "risk"?: string, "lang"?: "en"\|"tc"\|"both" }` |
 | `source_health` | `{}` |
@@ -199,6 +237,13 @@ Errors always go to stderr; stdout stays clean for `--json`.
   nearby?" → `beach --near <lat>,<lng>`; filter with `--grade good`.
 - "What does 'High' mean for me?" → `advice --risk high`; the answer is the official
   EPD wording, not a paraphrase.
+- "Is there a red tide near this beach?" → `red-tide --near <lat>,<lng> --active`;
+  a sighting without a dissipation date is still active.
+- "Should I worry about radiation / UV?" → `radiation` and `uv`; report the raw
+  values and bands, and note that radiation is compared with the network
+  median rather than a health limit.
+- "Has the air been bad this month?" → `stats --days 30 --station X`; the local
+  log starts at first use, so say how much coverage exists.
 - Monitoring: `aqhi --fail-above 7` exits 3, so a cron job can act on it directly.
 - Something looks broken → `doctor`, which probes every source and reports latency.
 
@@ -210,8 +255,9 @@ after an earlier call in the same minute, and `--max-age 0` to force a refetch.
 
 Data © Government of the Hong Kong Special Administrative Region: the
 Environmental Protection Department (AQHI, pollutant concentrations, forecast,
-station history and beach water-quality grading) and the Hong Kong Observatory
-(weather readings).
+station history, beach water-quality grading, river and marine water quality),
+the Hong Kong Observatory (weather, UV index and ambient gamma radiation) and
+the Agriculture, Fisheries and Conservation Department (red tide sightings).
 Street-level data is the PRAISE-HK model © HKUST Institute for the
 Environment. Keep this attribution when you redistribute the data.
 

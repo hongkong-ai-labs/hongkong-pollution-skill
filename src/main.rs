@@ -8,9 +8,11 @@ use hongkong_pollution_skill::model::{
     nearest_station, resolve_station, rollup,
 };
 use hongkong_pollution_skill::{
-    Error, Result, VERSION, advice, advice::Lang, aqhi, beach, brief, doctor, epd_app, http, mcp,
-    pollutants, praise, weather,
+    Error, Result, VERSION, advice, advice::Lang, aqhi, aqhi24, beach, brief, digest, doctor,
+    epd_app, http, mcp, pollutants, praise, radiation, redtide, stats, uv, water, weather,
 };
+
+mod update;
 
 /// Highest AQHI value accepted by `--fail-above`.
 const MAX_AQHI: i64 = 11;
@@ -34,9 +36,18 @@ USAGE:
     hkpollution weather    [--forecast] [--json]
     hkpollution beach      [--name <text>] [--district <text>] [--grade <band>]
                            [--near <lat>,<lng>] [--json]
+    hkpollution river      [--zone <text>] [--station <name>] [--months <1-60>] [--json]
+    hkpollution marine     [--zone <text>] [--station <name>] [--months <1-60>] [--json]
+    hkpollution red-tide   [--days <1-3650>] [--active] [--near <lat>,<lng>] [--json]
+    hkpollution radiation  [--station <name>] [--json]
+    hkpollution uv         [--json]
+    hkpollution stats      [--days <1-365>] [--station <name>] [--threshold <1-11>] [--json]
+    hkpollution compare    [--json]
+    hkpollution digest     [--json]
     hkpollution map        --bbox <lat0,lng0,lat1,lng1> [--pid <id>] [--at <iso>] [--json]
     hkpollution about      [--json]
     hkpollution doctor     [--json]
+    hkpollution update     [--check] [--force]
     hkpollution mcp
     hkpollution --help | --version
 
@@ -111,11 +122,20 @@ fn run(args: &[String]) -> Result<()> {
         "summary" => command_summary(&args[1..]),
         "weather" => command_weather(&args[1..]),
         "beach" => command_beach(&args[1..]),
+        "river" => command_water(&args[1..], water::Kind::River),
+        "marine" => command_water(&args[1..], water::Kind::Marine),
+        "red-tide" | "redtide" => command_red_tide(&args[1..]),
+        "radiation" => command_radiation(&args[1..]),
+        "uv" => command_uv(&args[1..]),
+        "stats" => command_stats(&args[1..]),
+        "compare" => command_compare(&args[1..]),
+        "digest" => command_digest(&args[1..]),
         "advice" => command_advice(&args[1..]),
         "brief" => command_brief(&args[1..]),
         "map" => command_map(&args[1..]),
         "about" => command_about(&args[1..]),
         "doctor" => command_doctor(&args[1..]),
+        "update" => command_update(&args[1..]),
         other => Err(Error::usage(format!("unknown command: {other}"))),
     }
 }
@@ -655,6 +675,23 @@ fn threshold_exit(fail_above: Option<i64>, worst_aqhi: Option<i64>) {
     }
 }
 
+fn command_update(args: &[String]) -> Result<()> {
+    let mut check = false;
+    let mut force = false;
+    for arg in args {
+        match arg.as_str() {
+            "--check" => check = true,
+            "--force" => force = true,
+            other => {
+                return Err(Error::usage(format!(
+                    "unknown option for `update`: {other}"
+                )));
+            }
+        }
+    }
+    update::run(check, force)
+}
+
 fn command_aqhi(args: &[String]) -> Result<()> {
     let options = parse_options(args, Command::Aqhi)?;
     if options.help {
@@ -732,7 +769,9 @@ fn command_history(args: &[String]) -> Result<()> {
         Some((station, _)) => Some(station.to_string()),
         None => options.station.clone(),
     };
-    let report = epd_app::fetch_history(query.as_deref(), options.hours.unwrap_or(1))?;
+    let hours = options.hours.unwrap_or(1);
+    let report = epd_app::fetch_history(query.as_deref(), hours)
+        .or_else(|error| aqhi24::history_report(query.as_deref(), hours).map_err(|_| error))?;
     let worst = report
         .stations
         .iter()
@@ -834,19 +873,23 @@ fn command_weather(args: &[String]) -> Result<()> {
     } else {
         None
     };
+    let ultraviolet = uv::fetch().ok();
     if options.json {
-        match forecast {
-            Some(forecast) => {
-                let mut payload = serde_json::to_value(&report)?;
-                if let Some(object) = payload.as_object_mut() {
-                    object.insert("forecast".to_string(), serde_json::to_value(&forecast)?);
-                }
-                print_json(&payload)
+        let mut payload = serde_json::to_value(&report)?;
+        if let Some(object) = payload.as_object_mut() {
+            if let Some(uv) = &ultraviolet {
+                object.insert("uv".to_string(), serde_json::to_value(uv)?);
             }
-            None => print_json(&report),
+            if let Some(forecast) = &forecast {
+                object.insert("forecast".to_string(), serde_json::to_value(forecast)?);
+            }
         }
+        print_json(&payload)
     } else {
         print_weather(&report);
+        if let Some(uv) = &ultraviolet {
+            println!("uv: {:.1} ({}) at {}", uv.index, uv.band, uv.time);
+        }
         if let Some(forecast) = &forecast {
             print_weather_forecast(forecast);
         }
@@ -1157,6 +1200,45 @@ fn print_brief(report: &brief::BriefReport) {
             format_f64(weather.temperature),
             format_i64(weather.humidity)
         );
+    }
+    if let Some(uv) = &report.uv {
+        println!(
+            "uv:       {:.1} ({}) at {}",
+            uv.index,
+            uv.band,
+            pretty_time(&uv.time)
+        );
+    }
+    match (&report.beach, &report.beach_error) {
+        (Some(beach), _) => println!(
+            "beach:    {} ({:.1} km) {} · {}{}",
+            beach.name,
+            beach.distance_km,
+            beach.grade_name,
+            beach.status,
+            match (&beach.ecoli_latest_per_100ml, &beach.ecoli_sampled_on) {
+                (Some(count), Some(date)) => format!(" · E. coli {count}/100 mL on {date}"),
+                _ => String::new(),
+            }
+        ),
+        (None, Some(error)) => println!("beach:    unavailable ({error})"),
+        (None, None) => {}
+    }
+    match (&report.red_tide, &report.red_tide_error) {
+        (Some(tide), _) => println!(
+            "red tide: {} sighting(s) within 10 km, {} active{}",
+            tide.sightings_within_10km,
+            tide.active_within_10km,
+            match (&tide.nearest_location, tide.nearest_km) {
+                (Some(location), Some(km)) => format!(
+                    " · nearest {location} ({km:.1} km){} ",
+                    if tide.nearest_active { " ACTIVE" } else { "" }
+                ),
+                _ => String::new(),
+            }
+        ),
+        (None, Some(error)) => println!("red tide: unavailable ({error})"),
+        (None, None) => {}
     }
     if let Some(advice) = &report.advice {
         println!();
@@ -1592,8 +1674,8 @@ fn print_doctor(report: &doctor::Report) {
         report.cache.entries, report.cache.bytes
     );
     println!(
-        "summary: {} ok, {} failed",
-        report.summary.ok, report.summary.failed
+        "summary: {} ok, {} stale, {} failed",
+        report.summary.ok, report.summary.stale, report.summary.failed
     );
 }
 
@@ -1651,4 +1733,507 @@ fn pretty_time(raw: &str) -> String {
     }
     let replaced = text.replacen('T', " ", 1);
     replaced.chars().take(16).collect()
+}
+
+/// Handle the shared cache flags; `true` when `arg` was one of them.
+fn cache_flag(arg: &str, args: &[String], index: &mut usize) -> Result<bool> {
+    match arg {
+        "--no-cache" => {
+            http::configure_cache(true, None);
+            *index += 1;
+            Ok(true)
+        }
+        "--refresh" => {
+            http::configure_cache(false, Some(0));
+            *index += 1;
+            Ok(true)
+        }
+        _ if arg == "--max-age" || arg.starts_with("--max-age=") => {
+            let value = take_value(args, index, arg, "--max-age")?;
+            let seconds: u64 = value.trim().parse().map_err(|_| {
+                Error::usage(format!(
+                    "--max-age must be a non-negative number of seconds, got {value:?}"
+                ))
+            })?;
+            http::configure_cache(false, Some(seconds));
+            Ok(true)
+        }
+        _ => Ok(false),
+    }
+}
+
+fn command_water(args: &[String], kind: water::Kind) -> Result<()> {
+    let mut json = false;
+    let mut months = 6_u32;
+    let mut zone: Option<String> = None;
+    let mut station: Option<String> = None;
+    let mut index = 0;
+    while index < args.len() {
+        let arg = args[index].as_str();
+        if cache_flag(arg, args, &mut index)? {
+            continue;
+        }
+        match arg {
+            "--json" => {
+                json = true;
+                index += 1;
+            }
+            "--help" | "-h" => {
+                println!("{USAGE}");
+                return Ok(());
+            }
+            "--months" | "--zone" | "--station" => {
+                let value = take_value(args, &mut index, arg, arg)?;
+                match arg {
+                    "--months" => {
+                        months = value.trim().parse().map_err(|_| {
+                            Error::usage(format!("--months must be a whole number, got {value:?}"))
+                        })?;
+                    }
+                    "--zone" => zone = Some(value),
+                    _ => station = Some(value),
+                }
+            }
+            other => {
+                return Err(Error::usage(format!(
+                    "unknown argument for `{}`: {other}",
+                    kind.name()
+                )));
+            }
+        }
+    }
+    let mut report = water::fetch(kind, months)?;
+    if let Some(zone) = &zone {
+        water::retain_zone(&mut report, zone);
+    }
+    if let Some(query) = &station {
+        water::retain_query(&mut report, query);
+    }
+    if json {
+        return print_json(&report);
+    }
+    if report.stations.is_empty() {
+        println!("No stations matched.");
+        return Ok(());
+    }
+    let headers: Vec<&str> = if kind == water::Kind::River {
+        vec!["ZONE", "RIVER", "STATION", "MONTH", "DO mg/L", "BOD5 mg/L"]
+    } else {
+        vec!["ZONE", "STATION", "MONTH", "DO mg/L", "BOD5 mg/L"]
+    };
+    let rows: Vec<Vec<String>> = report
+        .stations
+        .iter()
+        .map(|entry| {
+            let mut row = vec![entry.control_zone.clone()];
+            if kind == water::Kind::River {
+                row.push(entry.watercourse.clone().unwrap_or_else(|| "-".to_string()));
+            }
+            row.extend([
+                entry.station.clone(),
+                entry.latest.month.clone(),
+                number(entry.latest.dissolved_oxygen_mg_l),
+                number(entry.latest.bod5_mg_l),
+            ]);
+            row
+        })
+        .collect();
+    print_table(&headers, &rows);
+    println!(
+        "\n{} stations, newest sampling month {}",
+        report.count,
+        report.latest_month.as_deref().unwrap_or("unknown")
+    );
+    println!("EPD publishes these monthly, so they are not live readings.");
+    println!("\nsource: {}", report.source);
+    Ok(())
+}
+
+fn number(value: Option<f64>) -> String {
+    value.map_or_else(|| "-".to_string(), |value| format!("{value:.1}"))
+}
+
+fn command_red_tide(args: &[String]) -> Result<()> {
+    let mut json = false;
+    let mut active = false;
+    let mut days = redtide::DEFAULT_DAYS;
+    let mut near: Option<(f64, f64)> = None;
+    let mut index = 0;
+    while index < args.len() {
+        let arg = args[index].as_str();
+        if cache_flag(arg, args, &mut index)? {
+            continue;
+        }
+        match arg {
+            "--json" => {
+                json = true;
+                index += 1;
+            }
+            "--active" => {
+                active = true;
+                index += 1;
+            }
+            "--help" | "-h" => {
+                println!("{USAGE}");
+                return Ok(());
+            }
+            "--days" => {
+                let value = take_value(args, &mut index, arg, "--days")?;
+                days = value.trim().parse().map_err(|_| {
+                    Error::usage(format!("--days must be a whole number, got {value:?}"))
+                })?;
+            }
+            "--near" => {
+                let value = take_value(args, &mut index, arg, "--near")?;
+                near = Some(parse_near(&value)?);
+            }
+            other => {
+                return Err(Error::usage(format!(
+                    "unknown argument for `red-tide`: {other}"
+                )));
+            }
+        }
+    }
+    let mut report = redtide::fetch(days)?;
+    if active {
+        redtide::retain_active(&mut report);
+    }
+    if let Some((lat, lng)) = near {
+        redtide::sort_by_distance(&mut report, lat, lng);
+    }
+    if json {
+        return print_json(&report);
+    }
+    if report.sightings.is_empty() {
+        println!(
+            "No red tide sightings reported in the last {} days.",
+            report.days
+        );
+        return Ok(());
+    }
+    let rows: Vec<Vec<String>> = report
+        .sightings
+        .iter()
+        .map(|sighting| {
+            vec![
+                sighting.reported_on.clone(),
+                sighting.location.clone(),
+                sighting.species.clone(),
+                if sighting.active { "ACTIVE" } else { "" }.to_string(),
+                sighting
+                    .dissipated_on
+                    .clone()
+                    .unwrap_or_else(|| "-".to_string()),
+                match sighting.distance_km {
+                    Some(distance) => format!("{distance:.1} km"),
+                    None => "-".to_string(),
+                },
+            ]
+        })
+        .collect();
+    print_table(
+        &[
+            "REPORTED",
+            "LOCATION",
+            "SPECIES",
+            "STATUS",
+            "DISSIPATED",
+            "DIST",
+        ],
+        &rows,
+    );
+    println!(
+        "\n{} sighting(s), {} active, window {} days",
+        report.count, report.active, report.days
+    );
+    println!("\nsource: {}", report.source);
+    Ok(())
+}
+
+fn command_radiation(args: &[String]) -> Result<()> {
+    let mut json = false;
+    let mut station: Option<String> = None;
+    let mut index = 0;
+    while index < args.len() {
+        let arg = args[index].as_str();
+        if cache_flag(arg, args, &mut index)? {
+            continue;
+        }
+        match arg {
+            "--json" => {
+                json = true;
+                index += 1;
+            }
+            "--help" | "-h" => {
+                println!("{USAGE}");
+                return Ok(());
+            }
+            "--station" => station = Some(take_value(args, &mut index, arg, "--station")?),
+            other => {
+                return Err(Error::usage(format!(
+                    "unknown argument for `radiation`: {other}"
+                )));
+            }
+        }
+    }
+    let mut report = radiation::fetch()?;
+    if let Some(query) = &station {
+        radiation::retain_query(&mut report, query);
+    }
+    if json {
+        return print_json(&report);
+    }
+    if report.stations.is_empty() {
+        println!("No radiation station matched.");
+        return Ok(());
+    }
+    let rows: Vec<Vec<String>> = report
+        .stations
+        .iter()
+        .map(|reading| {
+            vec![
+                reading.station.clone(),
+                format!("{:.2}", reading.microsievert_per_hour),
+                match reading.relative_to_median {
+                    Some(ratio) => format!("{ratio:.2}x"),
+                    None => "-".to_string(),
+                },
+                reading.level.clone(),
+                reading.time.clone(),
+            ]
+        })
+        .collect();
+    print_table(&["STATION", "µSv/H", "VS MEDIAN", "LEVEL", "TIME"], &rows);
+    println!(
+        "\n{} stations, network median {:.2} µSv/h, observed {}",
+        report.count, report.median_microsievert_per_hour, report.observed_at
+    );
+    println!("`elevated` means more than twice the network median, not a health threshold.");
+    println!("\nsource: {}", report.source);
+    Ok(())
+}
+
+fn command_uv(args: &[String]) -> Result<()> {
+    let mut json = false;
+    let mut index = 0;
+    while index < args.len() {
+        let arg = args[index].as_str();
+        if cache_flag(arg, args, &mut index)? {
+            continue;
+        }
+        match arg {
+            "--json" => {
+                json = true;
+                index += 1;
+            }
+            "--help" | "-h" => {
+                println!("{USAGE}");
+                return Ok(());
+            }
+            other => {
+                return Err(Error::usage(format!("unknown argument for `uv`: {other}")));
+            }
+        }
+    }
+    let report = uv::fetch()?;
+    if json {
+        return print_json(&report);
+    }
+    println!(
+        "UV index {:.1} ({}) at {}\n\nsource: {}",
+        report.index, report.band, report.time, report.source
+    );
+    Ok(())
+}
+
+fn command_stats(args: &[String]) -> Result<()> {
+    let mut json = false;
+    let mut days = 30_u32;
+    let mut threshold = stats::DEFAULT_THRESHOLD;
+    let mut station: Option<String> = None;
+    let mut index = 0;
+    while index < args.len() {
+        let arg = args[index].as_str();
+        if cache_flag(arg, args, &mut index)? {
+            continue;
+        }
+        match arg {
+            "--json" => {
+                json = true;
+                index += 1;
+            }
+            "--help" | "-h" => {
+                println!("{USAGE}");
+                return Ok(());
+            }
+            "--days" | "--threshold" | "--station" => {
+                let value = take_value(args, &mut index, arg, arg)?;
+                match arg {
+                    "--days" => {
+                        days = value.trim().parse().map_err(|_| {
+                            Error::usage(format!("--days must be a whole number, got {value:?}"))
+                        })?;
+                    }
+                    "--threshold" => {
+                        threshold = value.trim().parse().map_err(|_| {
+                            Error::usage(format!(
+                                "--threshold must be a whole number, got {value:?}"
+                            ))
+                        })?;
+                    }
+                    _ => station = Some(value),
+                }
+            }
+            other => {
+                return Err(Error::usage(format!(
+                    "unknown argument for `stats`: {other}"
+                )));
+            }
+        }
+    }
+    let report = stats::build(days, station.as_deref(), threshold)?;
+    if json {
+        return print_json(&report);
+    }
+    let rows: Vec<Vec<String>> = report
+        .stations
+        .iter()
+        .map(|entry| {
+            vec![
+                entry.station.clone(),
+                entry.category.clone(),
+                entry.samples.to_string(),
+                entry.min.to_string(),
+                entry.max.to_string(),
+                format!("{:.1}", entry.mean),
+                entry.hours_at_or_above.to_string(),
+                entry.last_seen.clone(),
+            ]
+        })
+        .collect();
+    print_table(
+        &[
+            "STATION", "CATEGORY", "SAMPLES", "MIN", "MAX", "MEAN", ">=T", "LAST",
+        ],
+        &rows,
+    );
+    println!(
+        "\n{} observations over {} days, threshold AQHI {}{}",
+        report.observations,
+        report.days,
+        report.threshold,
+        report
+            .coverage_from
+            .as_ref()
+            .map(|from| format!(", coverage from {from}"))
+            .unwrap_or_default()
+    );
+    println!(
+        "The local log grows with every call; the documented 24-hour feed fills the first run."
+    );
+    println!("\nsource: {}", report.source);
+    Ok(())
+}
+
+fn command_compare(args: &[String]) -> Result<()> {
+    let mut json = false;
+    let mut index = 0;
+    while index < args.len() {
+        let arg = args[index].as_str();
+        if cache_flag(arg, args, &mut index)? {
+            continue;
+        }
+        match arg {
+            "--json" => {
+                json = true;
+                index += 1;
+            }
+            "--help" | "-h" => {
+                println!("{USAGE}");
+                return Ok(());
+            }
+            other => {
+                return Err(Error::usage(format!(
+                    "unknown argument for `compare`: {other}"
+                )));
+            }
+        }
+    }
+    let report = stats::compare()?;
+    if json {
+        return print_json(&report);
+    }
+    let rows: Vec<Vec<String>> = report
+        .stations
+        .iter()
+        .map(|row| {
+            vec![
+                row.station.clone(),
+                row.category.clone(),
+                row.aqhi
+                    .map_or_else(|| "-".to_string(), |aqhi| aqhi.to_string()),
+                row.risk.clone().unwrap_or_else(|| "-".to_string()),
+                match row.vs_category_mean {
+                    Some(delta) => format!("{delta:+.1}"),
+                    None => "-".to_string(),
+                },
+            ]
+        })
+        .collect();
+    print_table(
+        &["STATION", "CATEGORY", "AQHI", "RISK", "VS CATEGORY"],
+        &rows,
+    );
+    println!(
+        "\nnetwork mean {}, general {}, roadside {}",
+        number(report.network_mean),
+        number(report.general_mean),
+        number(report.roadside_mean)
+    );
+    println!("Roadside stations sit in traffic; compare them with roadside, not with Tap Mun.");
+    println!("\nsource: {}", report.source);
+    Ok(())
+}
+
+fn command_digest(args: &[String]) -> Result<()> {
+    let mut json = false;
+    let mut index = 0;
+    while index < args.len() {
+        let arg = args[index].as_str();
+        if cache_flag(arg, args, &mut index)? {
+            continue;
+        }
+        match arg {
+            "--json" => {
+                json = true;
+                index += 1;
+            }
+            "--help" | "-h" => {
+                println!("{USAGE}");
+                return Ok(());
+            }
+            other => {
+                return Err(Error::usage(format!(
+                    "unknown argument for `digest`: {other}"
+                )));
+            }
+        }
+    }
+    let report = digest::build();
+    if json {
+        return print_json(&report);
+    }
+    for line in &report.lines {
+        match &line.error {
+            Some(error) => println!("{:<10} unavailable: {error}", line.source),
+            None => println!("{:<10} {}", line.source, line.summary),
+        }
+    }
+    println!(
+        "\n{} of {} sources ok (fetched {})",
+        report.ok,
+        report.lines.len(),
+        report.fetched_at
+    );
+    Ok(())
 }
