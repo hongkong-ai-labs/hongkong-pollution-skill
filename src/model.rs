@@ -728,6 +728,9 @@ pub struct SummaryReport {
     /// HKO readings, only present when weather was requested.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub weather: Option<WeatherReport>,
+    /// Recent AQHI change at the worst station, when it could be computed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trend: Option<Trend>,
     /// Data providers used, for example `EPD` or `EPD / HKO`.
     pub source: String,
 }
@@ -803,4 +806,21 @@ pub fn mean(values: &[f64]) -> Option<f64> {
     }
     let sum: f64 = values.iter().sum();
     Some(((sum / values.len() as f64) * 10.0).round() / 10.0)
+}
+
+/// Recent AQHI change at one station.
+#[derive(Debug, Clone, Serialize)]
+pub struct Trend {
+    /// Station the change was measured at.
+    pub station: String,
+    /// Hours spanned by the comparison.
+    pub hours: u32,
+    /// Change in AQHI points, `to` minus `from`.
+    pub delta: i64,
+    /// `rising`, `falling` or `steady`.
+    pub direction: String,
+    /// Oldest AQHI in the window.
+    pub from: i64,
+    /// Newest AQHI in the window.
+    pub to: i64,
 }

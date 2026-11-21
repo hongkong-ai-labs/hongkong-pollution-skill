@@ -15,6 +15,9 @@ use hongkong_pollution_skill::{
 /// Highest AQHI value accepted by `--fail-above`.
 const MAX_AQHI: i64 = 11;
 
+/// Hours compared by the `summary` trend.
+const TREND_HOURS: u32 = 4;
+
 const USAGE: &str = "\
 hkpollution - Hong Kong air pollution data (EPD AQHI + HKO weather)
 
@@ -28,7 +31,9 @@ USAGE:
     hkpollution brief      --lat <22.x> --lng <114.x> [--fail-above <N>] [--json]
     hkpollution summary    [--station <name> | --near <lat>,<lng>] [--fail-above <N>]
                            [--json] [--with-weather]
-    hkpollution weather    [--json]
+    hkpollution weather    [--forecast] [--json]
+    hkpollution map        --bbox <lat0,lng0,lat1,lng1> [--pid <id>] [--at <iso>] [--json]
+    hkpollution about      [--json]
     hkpollution doctor     [--json]
     hkpollution mcp
     hkpollution --help | --version
@@ -42,6 +47,11 @@ OPTIONS:
     --hours <N>        hourly rows kept: 1-24 for `pollutants`, 1-23 for `history`,
                        1-48 for `street` (default 1, 24 for `street`)
     --fail-above <N>   exit 3 when the worst AQHI in the output is N or above (1-11)
+    --forecast         add the HKO nine-day forecast to `weather`
+    --no-trend         skip the extra history request `summary` makes for the trend
+    --bbox <box>       lat0,lng0,lat1,lng1 for `map`, inside Hong Kong
+    --pid <id>         pollutant id for `map` (default AQHIBN)
+    --at <iso>         timestamp for `map` (default: the current hour)
     --risk <band>      low, moderate, high, very-high, serious (or 1-3, 4-6, 7, 8-10, 11)
     --lang <code>      advice language: en (default), tc, both
     --json             print one JSON object to stdout and nothing else
@@ -100,6 +110,8 @@ fn run(args: &[String]) -> Result<()> {
         "weather" => command_weather(&args[1..]),
         "advice" => command_advice(&args[1..]),
         "brief" => command_brief(&args[1..]),
+        "map" => command_map(&args[1..]),
+        "about" => command_about(&args[1..]),
         "doctor" => command_doctor(&args[1..]),
         other => Err(Error::usage(format!("unknown command: {other}"))),
     }
@@ -116,6 +128,8 @@ enum Command {
     Weather,
     Advice,
     Brief,
+    Map,
+    About,
     Doctor,
 }
 
@@ -131,6 +145,8 @@ impl Command {
             Self::Weather => "weather",
             Self::Advice => "advice",
             Self::Brief => "brief",
+            Self::Map => "map",
+            Self::About => "about",
             Self::Doctor => "doctor",
         }
     }
@@ -174,6 +190,14 @@ impl Command {
         matches!(self, Self::Advice)
     }
 
+    fn allows_forecast_flag(self) -> bool {
+        matches!(self, Self::Weather)
+    }
+
+    fn allows_bbox(self) -> bool {
+        matches!(self, Self::Map)
+    }
+
     fn allows_weather(self) -> bool {
         matches!(self, Self::Summary)
     }
@@ -194,6 +218,11 @@ struct Options {
     fail_above: Option<i64>,
     risk: Option<usize>,
     lang: Option<Lang>,
+    forecast: bool,
+    no_trend: bool,
+    bbox: Option<(f64, f64, f64, f64)>,
+    pid: Option<String>,
+    at: Option<String>,
 }
 
 fn parse_options(args: &[String], command: Command) -> Result<Options> {
@@ -294,6 +323,49 @@ fn parse_options(args: &[String], command: Command) -> Result<Options> {
                 )));
             }
             options.fail_above = Some(threshold);
+        } else if arg == "--forecast" {
+            if !command.allows_forecast_flag() {
+                return Err(Error::usage(format!(
+                    "--forecast is only valid for `weather`, not `{}`",
+                    command.name()
+                )));
+            }
+            options.forecast = true;
+            index += 1;
+        } else if arg == "--no-trend" {
+            if command != Command::Summary {
+                return Err(Error::usage(format!(
+                    "--no-trend is only valid for `summary`, not `{}`",
+                    command.name()
+                )));
+            }
+            options.no_trend = true;
+            index += 1;
+        } else if arg == "--bbox" || arg.starts_with("--bbox=") {
+            if !command.allows_bbox() {
+                return Err(Error::usage(format!(
+                    "--bbox is only valid for `map`, not `{}`",
+                    command.name()
+                )));
+            }
+            let value = take_value(args, &mut index, arg, "--bbox")?;
+            options.bbox = Some(parse_bbox(&value)?);
+        } else if arg == "--pid" || arg.starts_with("--pid=") {
+            if !command.allows_bbox() {
+                return Err(Error::usage(format!(
+                    "--pid is only valid for `map`, not `{}`",
+                    command.name()
+                )));
+            }
+            options.pid = Some(take_value(args, &mut index, arg, "--pid")?);
+        } else if arg == "--at" || arg.starts_with("--at=") {
+            if !command.allows_bbox() {
+                return Err(Error::usage(format!(
+                    "--at is only valid for `map`, not `{}`",
+                    command.name()
+                )));
+            }
+            options.at = Some(take_value(args, &mut index, arg, "--at")?);
         } else if arg == "--risk" || arg.starts_with("--risk=") {
             if !command.allows_advice_flags() {
                 return Err(Error::usage(format!(
@@ -509,6 +581,64 @@ fn parse_near(value: &str) -> Result<(f64, f64)> {
 }
 
 /// Apply the cache flags for this run before any source is contacted.
+/// Read the value of `--flag value` or `--flag=value`, advancing the index.
+fn take_value(args: &[String], index: &mut usize, arg: &str, flag: &str) -> Result<String> {
+    let (name, value) = match arg.split_once('=') {
+        Some((name, value)) => (name, Some(value.to_string())),
+        None => (arg, None),
+    };
+    let _ = flag;
+    match value {
+        Some(value) => {
+            *index += 1;
+            Ok(value)
+        }
+        None => {
+            let value = args
+                .get(*index + 1)
+                .ok_or_else(|| Error::usage(format!("{name} requires a value")))?;
+            *index += 2;
+            Ok(value.clone())
+        }
+    }
+}
+
+/// Parse `--bbox lat0,lng0,lat1,lng1` and enforce the Hong Kong bounds.
+fn parse_bbox(value: &str) -> Result<(f64, f64, f64, f64)> {
+    let parts: Vec<&str> = value.split(',').map(str::trim).collect();
+    if parts.len() != 4 {
+        return Err(Error::usage(format!(
+            "--bbox requires lat0,lng0,lat1,lng1, got {value:?}"
+        )));
+    }
+    let mut numbers = [0.0_f64; 4];
+    for (slot, part) in numbers.iter_mut().zip(parts) {
+        *slot = part
+            .parse()
+            .map_err(|_| Error::usage(format!("--bbox values must be numbers, got {part:?}")))?;
+    }
+    let [lat0, lng0, lat1, lng1] = numbers;
+    if lat0 >= lat1 || lng0 >= lng1 {
+        return Err(Error::usage(
+            "--bbox needs lat0 < lat1 and lng0 < lng1 (south-west corner first)",
+        ));
+    }
+    for (lat, lng) in [(lat0, lng0), (lat1, lng1)] {
+        if !(praise::LAT_RANGE.0..=praise::LAT_RANGE.1).contains(&lat)
+            || !(praise::LNG_RANGE.0..=praise::LNG_RANGE.1).contains(&lng)
+        {
+            return Err(Error::usage(format!(
+                "--bbox must lie inside Hong Kong (lat {}-{}, lng {}-{}), got {lat},{lng}",
+                praise::LAT_RANGE.0,
+                praise::LAT_RANGE.1,
+                praise::LNG_RANGE.0,
+                praise::LNG_RANGE.1
+            )));
+        }
+    }
+    Ok((lat0, lng0, lat1, lng1))
+}
+
 fn apply_cache(options: &Options) {
     http::configure_cache(options.no_cache, options.max_age);
 }
@@ -664,6 +794,21 @@ fn command_summary(args: &[String]) -> Result<()> {
         .iter()
         .filter_map(|reading| reading.aqhi)
         .max();
+    if !options.no_trend {
+        let station = report
+            .worst
+            .as_ref()
+            .map(|reading| reading.station.clone())
+            .or_else(|| {
+                report
+                    .stations
+                    .first()
+                    .map(|reading| reading.station.clone())
+            });
+        if let Some(station) = station {
+            report.trend = aqhi::trend(&station, TREND_HOURS).ok();
+        }
+    }
     if options.json {
         print_json(&report)?;
     } else {
@@ -681,10 +826,27 @@ fn command_weather(args: &[String]) -> Result<()> {
     }
     apply_cache(&options);
     let report = weather::fetch()?;
+    let forecast = if options.forecast {
+        Some(weather::fetch_forecast()?)
+    } else {
+        None
+    };
     if options.json {
-        print_json(&report)
+        match forecast {
+            Some(forecast) => {
+                let mut payload = serde_json::to_value(&report)?;
+                if let Some(object) = payload.as_object_mut() {
+                    object.insert("forecast".to_string(), serde_json::to_value(&forecast)?);
+                }
+                print_json(&payload)
+            }
+            None => print_json(&report),
+        }
     } else {
         print_weather(&report);
+        if let Some(forecast) = &forecast {
+            print_weather_forecast(forecast);
+        }
         Ok(())
     }
 }
@@ -727,6 +889,47 @@ fn command_brief(args: &[String]) -> Result<()> {
     }
     threshold_exit(options.fail_above, brief::worst_aqhi(&report));
     Ok(())
+}
+
+fn command_map(args: &[String]) -> Result<()> {
+    let options = parse_options(args, Command::Map)?;
+    if options.help {
+        println!("{USAGE}");
+        return Ok(());
+    }
+    let Some((lat0, lng0, lat1, lng1)) = options.bbox else {
+        return Err(Error::usage("`map` requires --bbox <lat0,lng0,lat1,lng1>"));
+    };
+    apply_cache(&options);
+    let pollutant = options.pid.as_deref().unwrap_or("AQHIBN");
+    let report = praise::spatial_tile(lat0, lng0, lat1, lng1, pollutant, options.at.as_deref())?;
+    if options.json {
+        print_json(&report)
+    } else {
+        print_map(&report);
+        Ok(())
+    }
+}
+
+fn command_about(args: &[String]) -> Result<()> {
+    let options = parse_options(args, Command::About)?;
+    if options.help {
+        println!("{USAGE}");
+        return Ok(());
+    }
+    apply_cache(&options);
+    let sections = epd_app::fetch_abouts()?;
+    if options.json {
+        let payload = serde_json::json!({
+            "sections": sections,
+            "source": epd_app::SOURCE,
+            "fetched_at": hongkong_pollution_skill::now_hkt_iso8601(),
+        });
+        print_json(&payload)
+    } else {
+        print_about(&sections);
+        Ok(())
+    }
 }
 
 fn command_doctor(args: &[String]) -> Result<()> {
@@ -838,6 +1041,68 @@ fn print_brief(report: &brief::BriefReport) {
     }
     println!();
     println!("source: {} (fetched {})", report.source, report.fetched_at);
+}
+
+fn print_weather_forecast(report: &weather::ForecastReport) {
+    if let Some(situation) = &report.situation {
+        println!("{situation}");
+        println!();
+    }
+    let rows: Vec<Vec<String>> = report
+        .days
+        .iter()
+        .take(5)
+        .map(|day| {
+            vec![
+                day.date.clone(),
+                day.week.clone(),
+                day.weather.clone().unwrap_or_else(|| "-".to_string()),
+                match (day.min_temp, day.max_temp) {
+                    (Some(min), Some(max)) => format!("{min}-{max} C"),
+                    _ => "-".to_string(),
+                },
+                match (day.min_humidity, day.max_humidity) {
+                    (Some(min), Some(max)) => format!("{min}-{max} %"),
+                    _ => "-".to_string(),
+                },
+                day.psr.clone().unwrap_or_else(|| "-".to_string()),
+            ]
+        })
+        .collect();
+    print_table(
+        &["Date", "Day", "Weather", "Temp", "Humidity", "Rain"],
+        &rows,
+    );
+    println!();
+    println!("forecast source: HKO nine-day forecast");
+}
+
+fn print_map(report: &praise::MapReport) {
+    let (lat0, lng0, lat1, lng1) = report.coverage;
+    println!("pollutant: {}", report.pollutant);
+    println!("time:      {}", report.ts.as_deref().unwrap_or("-"));
+    println!("coverage:  {lat0:.4},{lng0:.4} to {lat1:.4},{lng1:.4}");
+    println!("tile:      {}", report.url);
+    println!();
+    println!("note: this is a link to a generated PNG, not data; the filename is ephemeral");
+    println!("source: {} (fetched {})", report.source, report.fetched_at);
+}
+
+fn print_about(sections: &[hongkong_pollution_skill::parse::AboutSection]) {
+    for (index, section) in sections.iter().enumerate() {
+        if index > 0 {
+            println!();
+        }
+        println!("{}", section.title);
+        if let Some(url) = &section.url {
+            println!("  {url}");
+        }
+        if !section.content.is_empty() {
+            println!("  {}", section.content);
+        }
+    }
+    println!();
+    println!("source: EPD app API about pages");
 }
 
 fn print_json<T: serde::Serialize>(value: &T) -> Result<()> {
@@ -1107,6 +1372,24 @@ fn print_summary(report: &SummaryReport) {
             } else {
                 format!(", warnings: {}", weather.warnings.join("; "))
             }
+        );
+    }
+    if let Some(trend) = &report.trend {
+        println!();
+        let unit = if trend.delta.abs() == 1 {
+            "point"
+        } else {
+            "points"
+        };
+        println!(
+            "trend: {} {} {} over {} h at {} ({} -> {})",
+            trend.direction,
+            trend.delta.abs(),
+            unit,
+            trend.hours,
+            trend.station,
+            trend.from,
+            trend.to
         );
     }
     println!();

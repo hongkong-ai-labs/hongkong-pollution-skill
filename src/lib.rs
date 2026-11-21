@@ -61,6 +61,21 @@ pub fn now_hkt_iso8601_plus_hours(hours: i64) -> String {
     format_hkt(unix_seconds() + hours * 3_600)
 }
 
+/// Current UTC hour as `YYYY-MM-DDTHH:00:00.000Z`.
+///
+/// The PRAISE-HK tile endpoint wants an ISO-8601 timestamp and rejects a
+/// malformed one, so the hour is floored and rendered without an offset.
+#[must_use]
+pub fn utc_hour_iso8601() -> String {
+    let unix_seconds = unix_seconds();
+    let hour_start = unix_seconds - unix_seconds.rem_euclid(3_600);
+    let days = hour_start.div_euclid(86_400);
+    let rem = hour_start.rem_euclid(86_400);
+    let (year, month, day) = civil_from_days(days);
+    let hour = rem / 3_600;
+    format!("{year:04}-{month:02}-{day:02}T{hour:02}:00:00.000Z")
+}
+
 fn unix_seconds() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

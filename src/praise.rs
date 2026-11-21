@@ -6,6 +6,8 @@
 //! shared [`crate::http`] timeouts and User-Agent, and reports are labelled
 //! `"source": "PRAISE-HK"`.
 
+use serde::Serialize;
+
 use crate::error::{Error, Result};
 use crate::http;
 use crate::model::{StreetLocation, StreetReading, StreetReport};
@@ -17,6 +19,9 @@ pub const POLLUTANT_INDEX_URL: &str = "https://praise-web.ust.hk:8443/api/pollut
 
 /// Current weather at a coordinate.
 pub const WEATHER_URL: &str = "https://praise-web.ust.hk:8443/api/weather";
+
+/// Raster tile metadata (a generated PNG) for a bounding box.
+pub const SPATIAL_TILES_URL: &str = "https://praise-web.ust.hk:8443/api/pollutant_spatial_tiles";
 
 /// Place name for a coordinate.
 pub const REVERSE_GEOCODING_URL: &str = "https://praise-web.ust.hk:8443/location/reverse_geocoding";
@@ -65,6 +70,68 @@ pub fn fetch(lat: f64, lng: f64, hours: u32) -> Result<StreetReport> {
     let body = http::get_cached(&url, CACHE_TTL_SECS)?;
     let series = parse::parse_praise_json(&body)?;
     build(series, lat, lng, hours)
+}
+
+/// A raster tile for a bounding box: a link, not data.
+#[derive(Debug, Clone, Serialize)]
+pub struct MapReport {
+    /// Pollutant id requested, for example `AQHIBN`.
+    pub pollutant: String,
+    /// Timestamp label of the tile, `YYYYMMDDHH`.
+    pub ts: Option<String>,
+    /// Generated PNG URL, ephemeral on the upstream side.
+    pub url: String,
+    /// Coverage of the returned tile: `(lat0, lng0, lat1, lng1)`.
+    pub coverage: (f64, f64, f64, f64),
+    /// Data provider, always `PRAISE-HK`.
+    pub source: String,
+    /// When this process made the request, in Hong Kong time.
+    pub fetched_at: String,
+}
+
+/// Fetch the raster tile metadata for a bounding box.
+///
+/// The tile itself is a PNG rendered by the model, named with an ephemeral
+/// UUID, so this returns a link rather than parsable data.
+///
+/// # Errors
+///
+/// Returns [`Error::Usage`] when the bounds are malformed or outside Hong Kong,
+/// and the usual HTTP/parse errors otherwise.
+pub fn spatial_tile(
+    lat0: f64,
+    lng0: f64,
+    lat1: f64,
+    lng1: f64,
+    pollutant: &str,
+    at: Option<&str>,
+) -> Result<MapReport> {
+    if lat0 >= lat1 || lng0 >= lng1 {
+        return Err(Error::usage(
+            "--bbox must be lat0,lng0,lat1,lng1 with lat0 < lat1 and lng0 < lng1",
+        ));
+    }
+    validate_location(lat0, lng0)?;
+    validate_location(lat1, lng1)?;
+    let timestamp = match at {
+        Some(value) => value.to_string(),
+        None => crate::utc_hour_iso8601(),
+    };
+    let url = format!(
+        "{SPATIAL_TILES_URL}?ts={}&pid={}&lat0={lat0}&lng0={lng0}&lat1={lat1}&lng1={lng1}&level=1&ver=1",
+        http::encode_query_value(&timestamp),
+        http::encode_query_value(pollutant),
+    );
+    let body = http::get_cached(&url, CACHE_TTL_SECS)?;
+    let tile = parse::parse_spatial_tile_json(&body)?;
+    Ok(MapReport {
+        pollutant: pollutant.to_string(),
+        ts: tile.ts,
+        url: tile.url,
+        coverage: tile.coverage,
+        source: SOURCE.to_string(),
+        fetched_at: now_hkt_iso8601(),
+    })
 }
 
 /// Place name for a Hong Kong coordinate, from PRAISE-HK reverse geocoding.

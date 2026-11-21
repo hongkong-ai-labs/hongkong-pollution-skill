@@ -73,6 +73,7 @@ pub fn summary(with_weather: bool) -> Result<SummaryReport> {
         worst_pm25: pollutants::worst_pollutant(&pollutant_report.stations, |reading| reading.pm25),
         worst_no2: pollutants::worst_pollutant(&pollutant_report.stations, |reading| reading.no2),
         weather: weather_report,
+        trend: None,
         source: if with_weather {
             "EPD / HKO".to_string()
         } else {
@@ -89,4 +90,51 @@ pub fn retain_stations(readings: &mut Vec<AqhiReading>, names: &[String]) {
             .iter()
             .any(|name| name.eq_ignore_ascii_case(&reading.station))
     });
+}
+
+/// AQHI change at `station` over the last `hours` hourly readings.
+///
+/// Uses the EPD app API history, which publishes 23 hourly points. Returns a
+/// steady trend when fewer than two points are available.
+///
+/// # Errors
+///
+/// Returns the usual HTTP/parse/usage errors from [`epd_app::fetch_history`].
+pub fn trend(station: &str, hours: u32) -> Result<crate::model::Trend> {
+    let report =
+        crate::epd_app::fetch_history(Some(station), hours.clamp(2, crate::epd_app::MAX_HOURS))?;
+    let series: Vec<_> = report
+        .stations
+        .first()
+        .map(|entry| entry.series.clone())
+        .unwrap_or_default()
+        .into_iter()
+        .take(hours.max(2) as usize)
+        .collect();
+    let newest = series.iter().find_map(|reading| reading.aqhi);
+    let oldest = series
+        .iter()
+        .rev()
+        .find_map(|reading| reading.aqhi)
+        .or(newest);
+    let (Some(to), Some(from)) = (newest, oldest) else {
+        return Err(crate::error::Error::parse(format!(
+            "no AQHI history available for {station}"
+        )));
+    };
+    let delta = to - from;
+    Ok(crate::model::Trend {
+        station: station.to_string(),
+        hours: u32::try_from(series.len().saturating_sub(1))
+            .unwrap_or(hours)
+            .max(1),
+        delta,
+        direction: match delta {
+            0 => "steady".to_string(),
+            value if value > 0 => "rising".to_string(),
+            _ => "falling".to_string(),
+        },
+        from,
+        to,
+    })
 }

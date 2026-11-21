@@ -21,6 +21,9 @@ pub const FORECAST_URL: &str = "https://app.epd-asmg.gov.hk/api/v2/forecast";
 /// Current readings for every monitor; `/{id}` appends hourly histories.
 pub const MONITORS_URL: &str = "https://app.epd-asmg.gov.hk/api/v2/monitors";
 
+/// About-page sections, long-term air-quality link and general notes.
+pub const ABOUTS_URL: &str = "https://app.epd-asmg.gov.hk/api/v2/abouts";
+
 /// Source label used by the forecast and history reports.
 pub const SOURCE: &str = "EPD app API";
 
@@ -35,6 +38,17 @@ const MONITORS_CACHE_TTL_SECS: u64 = 300;
 
 /// Freshness of one cached `/monitors/{id}` body, in seconds.
 const DETAIL_CACHE_TTL_SECS: u64 = 1_800;
+
+/// Fetch the app API about-page sections.
+///
+/// # Errors
+///
+/// Returns [`Error::Http`] for transport failures and [`Error::Parse`] when the
+/// payload carries no dated section.
+pub fn fetch_abouts() -> Result<Vec<crate::parse::AboutSection>> {
+    let body = http::get_cached(ABOUTS_URL, 86_400)?;
+    parse::parse_abouts_json(&body)
+}
 
 /// Fetch and join tomorrow's AQHI forecast.
 ///

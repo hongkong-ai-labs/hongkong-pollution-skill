@@ -15,6 +15,7 @@ use crate::model::{
     MonitorDetail, MonitorStation, ParsedForecast, ParsedPollutants, PollutantReading,
     PollutantRecord, StreetReading, WeatherReport, app_station_name,
 };
+use crate::weather::ForecastDay;
 
 const MONTHS: [&str; 12] = [
     "jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec",
@@ -890,4 +891,159 @@ pub fn parse_reverse_geocoding_json(input: &str) -> Result<String> {
         .filter(|name| !name.is_empty())
         .ok_or_else(|| Error::parse("reverse geocoding JSON: no place name returned"))?;
     Ok(name.to_string())
+}
+
+/// Parsed HKO nine-day forecast: the general situation plus the days.
+pub struct ParsedForecastDays {
+    /// General situation paragraph.
+    pub situation: Option<String>,
+    /// Forecast days, soonest first.
+    pub days: Vec<ForecastDay>,
+}
+
+/// Parse the HKO `fnd` payload.
+///
+/// # Errors
+///
+/// Returns [`Error::Parse`] when the body is not an object or carries no
+/// `weatherForecast` day.
+pub fn parse_hko_forecast_json(input: &str) -> Result<ParsedForecastDays> {
+    let root: Value = serde_json::from_str(strip_bom(input))?;
+    if !root.is_object() {
+        return Err(Error::parse(
+            "HKO forecast JSON: expected a top-level object",
+        ));
+    }
+    let situation = value_text(&root, "generalSituation");
+    let array = root
+        .get("weatherForecast")
+        .and_then(Value::as_array)
+        .ok_or_else(|| Error::parse("HKO forecast JSON: missing weatherForecast"))?;
+    let mut days = Vec::new();
+    for item in array {
+        let Some(date) = value_text(item, "forecastDate") else {
+            continue;
+        };
+        days.push(ForecastDay {
+            date,
+            week: value_text(item, "week").unwrap_or_default(),
+            weather: value_text(item, "forecastWeather"),
+            max_temp: nested_i64(item, "forecastMaxtemp", "value"),
+            min_temp: nested_i64(item, "forecastMintemp", "value"),
+            max_humidity: nested_i64(item, "forecastMaxrh", "value")
+                .or_else(|| nested_i64(item, "forecastMaxRH", "value")),
+            min_humidity: nested_i64(item, "forecastMinrh", "value")
+                .or_else(|| nested_i64(item, "forecastMinRH", "value")),
+            psr: value_text(item, "PSR")
+                .or_else(|| value_text(item, "psr"))
+                .map(|value| match value.as_str() {
+                    "low" => "Low".to_string(),
+                    "medium" => "Medium".to_string(),
+                    "high" => "High".to_string(),
+                    other => other.to_string(),
+                }),
+        });
+    }
+    if days.is_empty() {
+        return Err(Error::parse("HKO forecast JSON: no forecast days found"));
+    }
+    Ok(ParsedForecastDays { situation, days })
+}
+
+fn nested_i64(value: &Value, key: &str, inner: &str) -> Option<i64> {
+    let nested = value.get(key)?;
+    value_i64(nested, inner).or_else(|| value_i64(value, key))
+}
+
+/// Parsed PRAISE-HK spatial tile response.
+pub struct ParsedTile {
+    /// Tile URL, as published.
+    pub url: String,
+    /// Timestamp label, `YYYYMMDDHH`.
+    pub ts: Option<String>,
+    /// Coverage bounds: `(lat0, lng0, lat1, lng1)`.
+    pub coverage: (f64, f64, f64, f64),
+}
+
+/// Parse the PRAISE-HK `pollutant_spatial_tiles` payload.
+///
+/// # Errors
+///
+/// Returns [`Error::Parse`] when the body carries no tile URL or reports a
+/// non-zero `status`.
+pub fn parse_spatial_tile_json(input: &str) -> Result<ParsedTile> {
+    let root: Value = serde_json::from_str(strip_bom(input))?;
+    if !root.is_object() {
+        return Err(Error::parse(
+            "spatial tiles JSON: expected a top-level object",
+        ));
+    }
+    if let Some(status) = value_i64(&root, "status") {
+        if status != 0 {
+            let message = value_text(&root, "msg").unwrap_or_default();
+            return Err(Error::parse(format!(
+                "spatial tiles JSON: upstream status {status} {message}"
+            )));
+        }
+    }
+    let tiles = root
+        .get("tiles")
+        .ok_or_else(|| Error::parse("spatial tiles JSON: missing tiles"))?;
+    let url = value_text(tiles, "url")
+        .ok_or_else(|| Error::parse("spatial tiles JSON: missing tile url"))?;
+    let coverage = (
+        value_f64(tiles, "lat0").unwrap_or(f64::NAN),
+        value_f64(tiles, "lng0").unwrap_or(f64::NAN),
+        value_f64(tiles, "lat1").unwrap_or(f64::NAN),
+        value_f64(tiles, "lng1").unwrap_or(f64::NAN),
+    );
+    Ok(ParsedTile {
+        url,
+        ts: value_text(&root, "ts"),
+        coverage,
+    })
+}
+
+/// One "about" section from the EPD app API.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct AboutSection {
+    /// Section title.
+    pub title: String,
+    /// Section body with markup stripped.
+    pub content: String,
+    /// Link published with the section, when any.
+    pub url: Option<String>,
+}
+
+/// Parse the app API `/abouts` payload.
+///
+/// # Errors
+///
+/// Returns [`Error::Parse`] when the body is not an array or carries no titled
+/// section.
+pub fn parse_abouts_json(input: &str) -> Result<Vec<AboutSection>> {
+    let root: Value = serde_json::from_str(strip_bom(input))?;
+    let array = root
+        .as_array()
+        .ok_or_else(|| Error::parse("abouts JSON: expected a top-level array"))?;
+    let mut sections = Vec::new();
+    for item in array {
+        let Some(title) = value_text(item, "title") else {
+            continue;
+        };
+        let content = item
+            .get("content")
+            .and_then(Value::as_str)
+            .map(strip_tags)
+            .unwrap_or_default();
+        sections.push(AboutSection {
+            title,
+            content,
+            url: value_text(item, "url"),
+        });
+    }
+    if sections.is_empty() {
+        return Err(Error::parse("abouts JSON: no sections found"));
+    }
+    Ok(sections)
 }
