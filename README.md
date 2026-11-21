@@ -109,6 +109,8 @@ method: cargo install, the release installer, a source rebuild or Homebrew.
 | `hkpollution stats` | AQHI min/max/mean and exceedance hours per station over 1-365 days | table or `--json` |
 | `hkpollution compare` | Current AQHI ranked, with general and roadside means kept apart | table or `--json` |
 | `hkpollution digest` | One line per source for a cron job or morning check | report or `--json` |
+| `hkpollution recycling` | Nearest recyclable collection points with accepted waste types, opening hours and distance | table or `--json` |
+| `hkpollution watch` | Alert loop over AQHI, active red tides and radiation, with `--once` for cron | lines or NDJSON |
 | `hkpollution map` | PRAISE-HK raster tile link for a bounding box | report or `--json` |
 | `hkpollution about` | The app's about pages, privacy policy and long-term air quality links | report or `--json` |
 | `hkpollution mcp` | All of the above as MCP tools over stdio | JSON-RPC |
@@ -347,6 +349,29 @@ uv         index 0.0 (low), observed 2026-11-21T18:00:00+08:00
 weather    no active warnings
 ```
 
+### Recycling and watching
+
+`recycling` answers the street-level question — what is near me and what does it
+take — from EPD's collection-point list (9,700 points, 18 districts):
+
+```console
+$ hkpollution recycling --lat 22.32 --lng 114.17 --type glass --limit 3
+POINT                              DISTRICT       DIST    ACCEPTS
+---------------------------------  -------------  ------  --------------------------
+Public pavement outside Chung Lee… Yau Tsim Mong   0.2 km  Beverage Cartons, Glass …
+```
+
+`watch` evaluates the alert thresholds once per interval. With `--once` it
+exits `3` when anything fires, so a cron job or supervisor can act on it:
+
+```console
+$ hkpollution watch --once
+time: 2026-11-22T02:02:27+08:00 ok · AQHI 4 at Mong Kok
+$ hkpollution watch --aqhi 4 --red-tide --radiation --once
+time: … ALERT air: AQHI 4 at Mong Kok (Moderate) reached the threshold of 4
+exit status 3
+```
+
 ### Statistics and comparison
 
 `stats` keeps a local observation log (one line per station-hour, 90 days) in
@@ -423,6 +448,20 @@ cache and auto-approve calls. Point any stdio-capable MCP client at the binary:
 }
 ```
 
+Register it with any MCP client:
+
+```bash
+npx add-mcp "$(command -v hkpollution) mcp" --name hongkong-pollution -a claude-code -a codex -a cursor -y
+claude mcp add hongkong-pollution -- hkpollution mcp
+codex mcp add hongkong-pollution -- hkpollution mcp
+```
+
+`add-mcp` detects the client configuration files in the current project; add
+`-g` for a global install. `$(command -v hkpollution)` keeps the entry correct
+when the binary is on `PATH`; substitute an absolute path if your client does
+not inherit the shell `PATH`.
+
+
 | Tool | Arguments | Returns |
 | --- | --- | --- |
 | `air_quality_aqhi` | `{ "station"?: string }` | Current AQHI per station, filtered when `station` is given |
@@ -481,6 +520,7 @@ server keeps serving until stdin closes.
 | AFCD red tide sightings (CSV) | `https://redtide.afcd.gov.hk/data/RTMS_ob_RTLE.csv` | Active and recent red tides with coordinates |
 | HKO ambient gamma radiation (CSV) | `https://data.weather.gov.hk/weatherAPI/hko_data/regional-weather/latest_hourly_rmn.csv` | Hourly mean dose rate per station, µSv/h |
 | HKO UV index (CSV) | `https://data.weather.gov.hk/weatherAPI/hko_data/regional-weather/latest_15min_uvindex.csv` | 15-minute mean UV index |
+| Waste Reduction and Recycling collection points (CSV) | `https://www.wastereduction.gov.hk/sites/default/files/wasteless.csv` | Coordinates, accepted waste types and opening hours per point |
 
 A `source` of `EPD app API` or `PRAISE-HK` marks a report from one of those
 undocumented app APIs; `EPD` and `HKO` keep their existing meaning.

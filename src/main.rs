@@ -9,7 +9,8 @@ use hongkong_pollution_skill::model::{
 };
 use hongkong_pollution_skill::{
     Error, Result, VERSION, advice, advice::Lang, aqhi, aqhi24, beach, brief, digest, doctor,
-    epd_app, http, mcp, pollutants, praise, radiation, redtide, stats, uv, water, weather,
+    epd_app, http, mcp, pollutants, praise, radiation, recycling, redtide, stats, uv, watch, water,
+    weather,
 };
 
 mod update;
@@ -35,7 +36,7 @@ USAGE:
                            [--json] [--with-weather]
     hkpollution weather    [--forecast] [--json]
     hkpollution beach      [--name <text>] [--district <text>] [--grade <band>]
-                           [--near <lat>,<lng>] [--json]
+                           [--near <lat>,<lng>] [--history <0-10>] [--json]
     hkpollution river      [--zone <text>] [--station <name>] [--months <1-60>] [--json]
     hkpollution marine     [--zone <text>] [--station <name>] [--months <1-60>] [--json]
     hkpollution red-tide   [--days <1-3650>] [--active] [--near <lat>,<lng>] [--json]
@@ -44,6 +45,9 @@ USAGE:
     hkpollution stats      [--days <1-365>] [--station <name>] [--threshold <1-11>] [--json]
     hkpollution compare    [--json]
     hkpollution digest     [--json]
+    hkpollution recycling  --lat <22.x> --lng <114.x> [--limit <1-50>] [--type <text>] [--json]
+    hkpollution watch      [--interval <secs>] [--aqhi <1-11>] [--red-tide] [--radiation]
+                           [--once] [--json]
     hkpollution map        --bbox <lat0,lng0,lat1,lng1> [--pid <id>] [--at <iso>] [--json]
     hkpollution about      [--json]
     hkpollution doctor     [--json]
@@ -130,6 +134,8 @@ fn run(args: &[String]) -> Result<()> {
         "stats" => command_stats(&args[1..]),
         "compare" => command_compare(&args[1..]),
         "digest" => command_digest(&args[1..]),
+        "recycling" => command_recycling(&args[1..]),
+        "watch" => command_watch(&args[1..]),
         "advice" => command_advice(&args[1..]),
         "brief" => command_brief(&args[1..]),
         "map" => command_map(&args[1..]),
@@ -903,6 +909,7 @@ fn command_beach(args: &[String]) -> Result<()> {
     let mut district: Option<String> = None;
     let mut grade: Option<String> = None;
     let mut near: Option<(f64, f64)> = None;
+    let mut history = 0_u32;
     let mut index = 0;
     while index < args.len() {
         let arg = args[index].as_str();
@@ -923,7 +930,7 @@ fn command_beach(args: &[String]) -> Result<()> {
                 http::configure_cache(false, Some(0));
                 index += 1;
             }
-            "--max-age" | "--name" | "--district" | "--grade" | "--near" => {
+            "--max-age" | "--name" | "--district" | "--grade" | "--near" | "--history" => {
                 let value = args
                     .get(index + 1)
                     .ok_or_else(|| Error::usage(format!("{arg} requires a value")))?
@@ -940,6 +947,11 @@ fn command_beach(args: &[String]) -> Result<()> {
                     "--name" => name = Some(value),
                     "--district" => district = Some(value),
                     "--near" => near = Some(parse_near(&value)?),
+                    "--history" => {
+                        history = value.trim().parse().map_err(|_| {
+                            Error::usage(format!("--history must be a whole number, got {value:?}"))
+                        })?;
+                    }
                     _ => grade = Some(value),
                 }
                 index += 2;
@@ -951,7 +963,7 @@ fn command_beach(args: &[String]) -> Result<()> {
             }
         }
     }
-    let mut report = beach::fetch()?;
+    let mut report = beach::fetch_with_history(history)?;
     if let Some(query) = &name {
         beach::retain_query(&mut report, query);
     }
@@ -1849,6 +1861,16 @@ fn command_water(args: &[String], kind: water::Kind) -> Result<()> {
     Ok(())
 }
 
+/// Shorten a long cell so a table stays readable on a terminal.
+fn truncate(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        return text.to_string();
+    }
+    let mut shortened: String = text.chars().take(max.saturating_sub(1)).collect();
+    shortened.push('…');
+    shortened
+}
+
 fn number(value: Option<f64>) -> String {
     value.map_or_else(|| "-".to_string(), |value| format!("{value:.1}"))
 }
@@ -2236,4 +2258,179 @@ fn command_digest(args: &[String]) -> Result<()> {
         report.fetched_at
     );
     Ok(())
+}
+
+fn command_recycling(args: &[String]) -> Result<()> {
+    let mut json = false;
+    let mut lat: Option<f64> = None;
+    let mut lng: Option<f64> = None;
+    let mut limit = recycling::DEFAULT_LIMIT;
+    let mut waste: Option<String> = None;
+    let mut index = 0;
+    while index < args.len() {
+        let arg = args[index].as_str();
+        if cache_flag(arg, args, &mut index)? {
+            continue;
+        }
+        match arg {
+            "--json" => {
+                json = true;
+                index += 1;
+            }
+            "--help" | "-h" => {
+                println!("{USAGE}");
+                return Ok(());
+            }
+            "--lat" | "--lng" | "--limit" | "--type" => {
+                let value = take_value(args, &mut index, arg, arg)?;
+                match arg {
+                    "--lat" => {
+                        lat = Some(value.trim().parse().map_err(|_| {
+                            Error::usage(format!("--lat must be a number, got {value:?}"))
+                        })?);
+                    }
+                    "--lng" => {
+                        lng = Some(value.trim().parse().map_err(|_| {
+                            Error::usage(format!("--lng must be a number, got {value:?}"))
+                        })?);
+                    }
+                    "--limit" => {
+                        limit = value.trim().parse().map_err(|_| {
+                            Error::usage(format!("--limit must be a whole number, got {value:?}"))
+                        })?;
+                    }
+                    _ => waste = Some(value),
+                }
+            }
+            other => {
+                return Err(Error::usage(format!(
+                    "unknown argument for `recycling`: {other}"
+                )));
+            }
+        }
+    }
+    let (Some(lat), Some(lng)) = (lat, lng) else {
+        return Err(Error::usage(
+            "`recycling` requires --lat and --lng together",
+        ));
+    };
+    let report = recycling::near(lat, lng, limit, waste.as_deref())?;
+    if json {
+        return print_json(&report);
+    }
+    let rows: Vec<Vec<String>> = report
+        .points
+        .iter()
+        .map(|point| {
+            vec![
+                point.name.clone(),
+                point.district.clone(),
+                format!("{:.1} km", point.distance_km),
+                truncate(&point.waste_types.join(", "), 48),
+                truncate(point.opening_hours.as_deref().unwrap_or("-"), 40),
+            ]
+        })
+        .collect();
+    print_table(&["POINT", "DISTRICT", "DIST", "ACCEPTS", "HOURS"], &rows);
+    println!(
+        "\n{} nearest point(s){}",
+        report.count,
+        report
+            .waste_type
+            .as_ref()
+            .map(|kind| format!(" accepting {kind}"))
+            .unwrap_or_default()
+    );
+    println!("\nsource: {}", report.source);
+    Ok(())
+}
+
+fn command_watch(args: &[String]) -> Result<()> {
+    let mut json = false;
+    let mut once = false;
+    let mut interval = 300_u64;
+    let mut thresholds = watch::Thresholds::default();
+    let mut index = 0;
+    while index < args.len() {
+        let arg = args[index].as_str();
+        if cache_flag(arg, args, &mut index)? {
+            continue;
+        }
+        match arg {
+            "--json" => {
+                json = true;
+                index += 1;
+            }
+            "--once" => {
+                once = true;
+                index += 1;
+            }
+            "--red-tide" => {
+                thresholds.red_tide = true;
+                index += 1;
+            }
+            "--radiation" => {
+                thresholds.radiation = true;
+                index += 1;
+            }
+            "--help" | "-h" => {
+                println!("{USAGE}");
+                return Ok(());
+            }
+            "--interval" | "--aqhi" => {
+                let value = take_value(args, &mut index, arg, arg)?;
+                match arg {
+                    "--interval" => {
+                        interval = value.trim().parse().map_err(|_| {
+                            Error::usage(format!(
+                                "--interval must be a whole number of seconds, got {value:?}"
+                            ))
+                        })?;
+                    }
+                    _ => {
+                        thresholds.aqhi = value.trim().parse().map_err(|_| {
+                            Error::usage(format!("--aqhi must be a whole number, got {value:?}"))
+                        })?;
+                    }
+                }
+            }
+            other => {
+                return Err(Error::usage(format!(
+                    "unknown argument for `watch`: {other}"
+                )));
+            }
+        }
+    }
+    if interval == 0 {
+        return Err(Error::usage("--interval must be at least 1 second"));
+    }
+    loop {
+        let check = watch::check(&thresholds)?;
+        if json {
+            print_json(&check)?;
+        } else {
+            let worst = check
+                .worst_aqhi
+                .as_ref()
+                .map(|worst| format!("AQHI {} at {}", worst.aqhi, worst.station))
+                .unwrap_or_else(|| "AQHI unavailable".to_string());
+            if check.alerts.is_empty() {
+                println!("{} ok · {worst}", check.at);
+            } else {
+                for alert in &check.alerts {
+                    println!("{} ALERT {}: {}", check.at, alert.source, alert.message);
+                }
+            }
+            for error in &check.errors {
+                println!("{} warning: {error}", check.at);
+            }
+        }
+        if once {
+            if check.triggered() {
+                exit(3);
+            }
+            return Ok(());
+        }
+        std::thread::sleep(std::time::Duration::from_secs(interval));
+    }
 }

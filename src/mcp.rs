@@ -12,8 +12,8 @@ use crate::advice::{self, Lang};
 use crate::error::{Error, Result};
 use crate::model::resolve_station;
 use crate::{
-    VERSION, aqhi, brief, digest, doctor, epd_app, http, pollutants, praise, radiation, redtide,
-    stats, uv, water, weather,
+    VERSION, aqhi, brief, digest, doctor, epd_app, http, pollutants, praise, radiation, recycling,
+    redtide, stats, uv, watch, water, weather,
 };
 
 /// Newest MCP protocol revision this server implements.
@@ -311,6 +311,12 @@ fn tools_list() -> Value {
                         "lng": {
                             "type": "number",
                             "description": "Longitude in Hong Kong; with lat, sort beaches by distance."
+                        },
+                        "history": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 10,
+                            "description": "Extra published E. coli years per beach (default 0)."
                         }
                     },
                     "additionalProperties": false
@@ -450,6 +456,56 @@ fn tools_list() -> Value {
                 }
             },
             {
+                "name": "recycling",
+                "description": "Nearest recyclable collection points with accepted waste types, \
+                                opening hours and distance.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "lat": { "type": "number", "description": "Latitude in Hong Kong." },
+                        "lng": { "type": "number", "description": "Longitude in Hong Kong." },
+                        "limit": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 50,
+                            "description": "How many points to return (default 5)."
+                        },
+                        "type": {
+                            "type": "string",
+                            "description": "Waste type substring, e.g. \"Plastics\" or \"Glass\"."
+                        }
+                    },
+                    "required": ["lat", "lng"],
+                    "additionalProperties": false
+                }
+            },
+            {
+                "name": "environment_alerts",
+                "description": "One alert evaluation across live sources: worst AQHI against a \
+                                threshold, active red tides and radiation stations above twice \
+                                the network median. Each source degrades independently.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "aqhi": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 11,
+                            "description": "AQHI alert threshold (default 7)."
+                        },
+                        "red_tide": {
+                            "type": "boolean",
+                            "description": "Also alert on active red tide sightings."
+                        },
+                        "radiation": {
+                            "type": "boolean",
+                            "description": "Also alert on radiation above twice the median."
+                        }
+                    },
+                    "additionalProperties": false
+                }
+            },
+            {
                 "name": "source_health",
                 "description": "Probe every upstream source once and report latency, failures, \
                                 schema mismatches and stale payloads, plus cache statistics.",
@@ -515,6 +571,8 @@ fn call_tool(id: Option<Value>, params: Option<&Value>) -> Value {
         "air_quality_stats" => tool_stats(&arguments),
         "station_comparison" => tool_compare(),
         "environment_digest" => serde_json::to_value(digest::build()).map_err(Error::from),
+        "recycling" => tool_recycling(&arguments),
+        "environment_alerts" => tool_alerts(&arguments),
         "source_health" => tool_source_health(),
         other => {
             return error_response(id, INVALID_PARAMS, &format!("unknown tool: {other}"));
@@ -627,7 +685,14 @@ fn tool_weather() -> Result<Value> {
 }
 
 fn tool_beach(arguments: &Value) -> Result<Value> {
-    let mut report = crate::beach::fetch()?;
+    let history = match arguments.get("history") {
+        None | Some(Value::Null) => 0,
+        Some(value) => value
+            .as_u64()
+            .and_then(|raw| u32::try_from(raw).ok())
+            .ok_or_else(|| Error::usage("history must be an integer between 0 and 10"))?,
+    };
+    let mut report = crate::beach::fetch_with_history(history)?;
     if let Some(query) = arguments.get("name").and_then(Value::as_str) {
         crate::beach::retain_query(&mut report, query);
     }
@@ -707,6 +772,46 @@ fn tool_radiation(arguments: &Value) -> Result<Value> {
         radiation::retain_query(&mut report, query);
     }
     Ok(serde_json::to_value(&report)?)
+}
+
+fn tool_recycling(arguments: &Value) -> Result<Value> {
+    let lat = arguments
+        .get("lat")
+        .and_then(Value::as_f64)
+        .ok_or_else(|| Error::usage("lat is required"))?;
+    let lng = arguments
+        .get("lng")
+        .and_then(Value::as_f64)
+        .ok_or_else(|| Error::usage("lng is required"))?;
+    let limit = match arguments.get("limit") {
+        None | Some(Value::Null) => recycling::DEFAULT_LIMIT,
+        Some(value) => value
+            .as_u64()
+            .and_then(|raw| usize::try_from(raw).ok())
+            .ok_or_else(|| Error::usage("limit must be an integer between 1 and 50"))?,
+    };
+    let waste = arguments.get("type").and_then(Value::as_str);
+    Ok(serde_json::to_value(recycling::near(
+        lat, lng, limit, waste,
+    )?)?)
+}
+
+fn tool_alerts(arguments: &Value) -> Result<Value> {
+    let mut thresholds = watch::Thresholds::default();
+    if let Some(value) = arguments.get("aqhi") {
+        thresholds.aqhi = value
+            .as_i64()
+            .ok_or_else(|| Error::usage("aqhi must be an integer between 1 and 11"))?;
+    }
+    thresholds.red_tide = arguments
+        .get("red_tide")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    thresholds.radiation = arguments
+        .get("radiation")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    Ok(serde_json::to_value(watch::check(&thresholds)?)?)
 }
 
 fn tool_uv() -> Result<Value> {

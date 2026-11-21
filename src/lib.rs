@@ -40,10 +40,12 @@ pub mod parse;
 pub mod pollutants;
 pub mod praise;
 pub mod radiation;
+pub mod recycling;
 pub mod redtide;
 pub mod stats;
 pub mod store;
 pub mod uv;
+pub mod watch;
 pub mod water;
 pub mod weather;
 
