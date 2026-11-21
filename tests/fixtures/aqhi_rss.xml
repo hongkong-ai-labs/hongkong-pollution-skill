@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Air Quality Health Index - Individual Stations</title>
+    <link>https://www.aqhi.gov.hk/</link>
+    <description>AQHI by station</description>
+    <item>
+      <title>Central/Western</title>
+      <description><![CDATA[Moderate, 4 - updated 2026-11-21 17:30]]></description>
+      <pubDate>Sat, 21 Nov 2026 17:30:00 +0800</pubDate>
+    </item>
+    <item>
+      <title>Mong Kok</title>
+      <description>8 (High)</description>
+      <link>https://www.aqhi.gov.hk/en/aqhi-individual.html</link>
+      <pubDate>Sat, 21 Nov 2026 17:30:00 +0800</pubDate>
+    </item>
+    <item>
+      <title>Tap Mun</title>
+      <description>AQHI : 2 - Low risk at 17:30</description>
+    </item>
+    <item>
+      <title>Sha Tin</title>
+      <description>11 - Serious</description>
+      <pubDate>Sat, 21 Nov 2026 17:30:00 +0800</pubDate>
+    </item>
+  </channel>
+</rss>

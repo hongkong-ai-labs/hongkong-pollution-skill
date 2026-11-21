@@ -1,0 +1,24 @@
+[package]
+name = "hongkong-pollution-skill"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Hong Kong air pollution CLI and MCP stdio server backed by EPD AQHI and HKO open data"
+license = "MIT"
+repository = "https://github.com/hongkong-ai-labs/hongkong-pollution-skill"
+readme = "README.md"
+keywords = ["hong-kong", "air-quality", "aqhi", "mcp", "cli"]
+categories = ["command-line-utilities"]
+
+[lib]
+name = "hongkong_pollution_skill"
+path = "src/lib.rs"
+
+[[bin]]
+name = "hkpollution"
+path = "src/main.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+ureq = { version = "2", default-features = false, features = ["tls", "gzip", "charset"] }
