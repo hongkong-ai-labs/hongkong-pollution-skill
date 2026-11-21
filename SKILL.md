@@ -22,7 +22,7 @@ Official Hong Kong air quality and weather data in one binary, `hkpollution`.
   latitude/longitude, current hour plus forecast.
 - HKO current temperature and humidity readings plus active weather warnings.
 
-All seven are available as CLI commands and as MCP tools. The last three come
+All ten are available as CLI commands and as MCP tools. The last three come
 from app APIs that the upstream mobile apps use; reports label them
 `"source": "EPD app API"` and `"source": "PRAISE-HK"`.
 
@@ -53,7 +53,11 @@ It checks, in order: `$HKPOLLUTION_BIN`, `hkpollution` on `PATH`,
 | `hkpollution history [--station NAME] [--hours 1-23] [--json]` | Hourly AQHI and pollutants per station, newest first |
 | `hkpollution street --lat L --lng L [--hours 1-48] [--json]` | PRAISE-HK street-level AQHI, %AR and pollutants |
 | `hkpollution summary [--with-weather] [--json]` | Network rollup, optional HKO weather |
-| `hkpollution weather [--json]` | HKO temperature, humidity and warnings |
+| `hkpollution weather [--forecast] [--json]` | HKO temperature, humidity and warnings, plus the nine-day forecast |
+| `hkpollution advice [--risk BAND] [--lang en\|tc\|both] [--json]` | Official EPD precautionary actions per AQHI band |
+| `hkpollution brief --lat L --lng L [--json]` | Place name, street AQHI, nearest station, weather and advice in one call |
+| `hkpollution map --bbox lat0,lng0,lat1,lng1 [--json]` | PRAISE-HK raster tile link for a bounding box |
+| `hkpollution about [--json]` | The app's about pages |
 | `hkpollution mcp` | Every dataset above as MCP tools over stdio |
 
 `--station` is a case-insensitive substring match; an ambiguous name returns
@@ -118,6 +122,9 @@ protocol revision `2024-11-05`) and exposes seven tools:
 | `pollutant_concentrations` | `{ "station"?: string, "hours"?: 1-24 }` |
 | `pollution_summary` | `{ "include_weather"?: boolean }` |
 | `hong_kong_weather` | `{}` |
+| `air_quality_briefing` | `{ "lat": number, "lng": number, "no_cache"?: boolean }` |
+| `health_advice` | `{ "risk"?: string, "lang"?: "en"\|"tc"\|"both" }` |
+| `source_health` | `{}` |
 | `aqhi_forecast` | `{}` |
 | `station_history` | `{ "station"?: string, "hours"?: 1-23 }` |
 | `street_level_aqhi` | `{ "lat": number, "lng": number, "hours"?: 1-48 }` |
@@ -149,6 +156,23 @@ outage.
 | `2` | Usage error (unknown command or flag, bad `--hours`) |
 
 Errors always go to stderr; stdout stays clean for `--json`.
+
+## Answering patterns
+
+- "Is the air bad where I am / can I run outside?" → `brief --lat <x> --lng <y>`
+  (one call: street AQHI, nearest station, weather, advice). Follow with
+  `advice --risk <band>` when the user wants the full precautionary table.
+- "Which station is worst right now?" → `summary --json`, read `worst` and `trend`.
+- "Where should I walk?" → `street --lat <x> --lng <y> --hours 3` for nearby hours.
+- "Will it be better tomorrow?" → `forecast` (AQHI bands) or `weather --forecast`.
+- "What does 'High' mean for me?" → `advice --risk high`; the answer is the official
+  EPD wording, not a paraphrase.
+- Monitoring: `aqhi --fail-above 7` exits 3, so a cron job can act on it directly.
+- Something looks broken → `doctor`, which probes every source and reports latency.
+
+The cache is on by default (5 min for current readings, 15 min for forecasts,
+30 min for station history, 24 h for the static advice pages). Pass `--no-cache` when the user asks for "right now"
+after an earlier call in the same minute, and `--max-age 0` to force a refetch.
 
 ## Attribution
 

@@ -1,0 +1,77 @@
+name: Upstream drift
+
+# The two app APIs are undocumented, so their payloads can change without notice.
+# This job notices: it runs every command against the live sources, compares the
+# top-level JSON keys with tests/schema/, runs the doctor probes, and files a single
+# `drift` issue when something moved.
+
+on:
+  schedule:
+    - cron: "30 1 * * *" # daily 01:30 UTC (09:30 HKT)
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  drift:
+    name: payload shapes and doctor
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build release binary
+        run: cargo build --locked --release
+
+      - name: Check every source
+        id: check
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          {
+            echo "## doctor"
+            ./target/release/hkpollution doctor
+            echo
+            echo "## payload shapes"
+            ./scripts/check-drift.sh
+          } 2>&1 | tee drift.log
+
+      - name: Ensure the drift label exists
+        if: steps.check.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh label create drift --force --color d93f0b --description "upstream payload drift"
+
+      - name: File or update the drift issue
+        if: steps.check.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          {
+            echo "Nightly source check failed on $(date -u '+%Y-%m-%d %H:%M UTC')."
+            echo
+            echo "Run: $RUN_URL"
+            echo
+            echo '```'
+            tail -60 drift.log
+            echo '```'
+          } > body.md
+          existing=$(gh issue list --label drift --state open --json number -q '.[0].number')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body-file body.md
+          else
+            gh issue create --title "Upstream drift detected" --label drift --body-file body.md
+          fi
+
+      - name: Fail when a source changed
+        if: steps.check.outcome == 'failure'
+        run: exit 1

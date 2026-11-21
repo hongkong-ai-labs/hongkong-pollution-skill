@@ -57,7 +57,7 @@ fn mcp_answers_initialize_tools_list_ping_and_unknown_methods() {
         "id": 1,
         "method": "initialize",
         "params": {
-            "protocolVersion": "2024-11-05",
+            "protocolVersion": "2025-06-18",
             "capabilities": {},
             "clientInfo": { "name": "hkpollution-tests", "version": "0.0.0" }
         }
@@ -101,7 +101,7 @@ fn mcp_answers_initialize_tools_list_ping_and_unknown_methods() {
     let initialize = server.receive();
     assert_eq!(initialize["jsonrpc"], "2.0");
     assert_eq!(initialize["id"], 1);
-    assert_eq!(initialize["result"]["protocolVersion"], "2024-11-05");
+    assert_eq!(initialize["result"]["protocolVersion"], "2025-06-18");
     assert!(initialize["result"]["capabilities"]["tools"].is_object());
     assert_eq!(
         initialize["result"]["serverInfo"]["name"],
@@ -140,6 +140,11 @@ fn mcp_answers_initialize_tools_list_ping_and_unknown_methods() {
     for tool in tools {
         assert!(tool["description"].is_string(), "every tool is described");
         assert_eq!(tool["inputSchema"]["type"], "object");
+        assert_eq!(
+            tool["annotations"]["readOnlyHint"], true,
+            "every tool is read-only"
+        );
+        assert_eq!(tool["outputSchema"]["type"], "object");
     }
 
     let forecast = tools
@@ -236,4 +241,33 @@ fn mcp_reports_parse_errors_and_keeps_serving() {
 
     server.close_stdin();
     assert!(server.child.wait().expect("server exits").success());
+}
+
+#[test]
+fn mcp_negotiates_protocol_version_and_returns_structured_content() {
+    let mut server = Server::start();
+    server.send(&json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": { "protocolVersion": "2024-11-05" }
+    }));
+    let initialize = server.receive();
+    assert_eq!(
+        initialize["result"]["protocolVersion"], "2024-11-05",
+        "an older client keeps its revision"
+    );
+
+    server.send(&json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": { "name": "health_advice", "arguments": { "risk": "low", "lang": "en" } }
+    }));
+    let call = server.receive();
+    assert_eq!(call["result"]["isError"], false);
+    let structured = &call["result"]["structuredContent"];
+    assert_eq!(structured["source"], "EPD");
+    assert_eq!(structured["bands"][0]["risk"], "Low");
+    assert!(call["result"]["content"][0]["text"].is_string());
 }

@@ -16,6 +16,7 @@ on:
 
 permissions:
   contents: write
+  packages: write
 
 env:
   CARGO_TERM_COLOR: always
@@ -214,3 +215,125 @@ jobs:
             gh release create "$TAG" dist/*.tar.gz dist/SHA256SUMS \
               --title "$TAG" --generate-notes --verify-tag
           fi
+
+  docker:
+    name: publish container image
+    needs: [verify, build]
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ needs.verify.outputs.tag }}
+      IMAGE: ghcr.io/${{ github.repository_owner }}/hkpollution
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Download linux tarballs
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Log in to the container registry
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "$GH_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Build and push per architecture
+        run: |
+          set -euo pipefail
+          for target in x86_64-unknown-linux-musl aarch64-unknown-linux-musl; do
+            case "$target" in
+              x86_64*) arch=amd64 ;;
+              *) arch=arm64 ;;
+            esac
+            mkdir -p "context-$arch"
+            tar -xzf "dist/hkpollution-${TAG}-${target}.tar.gz" -C "context-$arch"
+            cp Dockerfile "context-$arch/"
+            docker buildx build --platform "linux/$arch" \
+              --label "org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}" \
+              -t "$IMAGE:$TAG-$arch" --push "context-$arch"
+          done
+          docker buildx imagetools create -t "$IMAGE:$TAG" "$IMAGE:$TAG-amd64" "$IMAGE:$TAG-arm64"
+          docker buildx imagetools create -t "$IMAGE:latest" "$IMAGE:$TAG-amd64" "$IMAGE:$TAG-arm64"
+
+  homebrew:
+    name: update the homebrew tap
+    needs: [verify, build]
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ needs.verify.outputs.tag }}
+      VERSION: ${{ needs.verify.outputs.version }}
+      BREW_TOKEN: ${{ secrets.BREW_TOKEN }}
+    steps:
+      - name: Download darwin tarballs
+        if: env.BREW_TOKEN != ''
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Note the missing tap token
+        if: env.BREW_TOKEN == ''
+        run: |
+          echo "BREW_TOKEN is not set, so the formula was not pushed." >> "$GITHUB_STEP_SUMMARY"
+          echo "Add a PAT with repo scope as BREW_TOKEN to publish to the tap." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Generate the formula
+        if: env.BREW_TOKEN != ''
+        run: |
+          set -euo pipefail
+          base="${{ github.server_url }}/${{ github.repository }}/releases/download/${TAG}"
+          arm_sha=$(shasum -a 256 "dist/hkpollution-${TAG}-aarch64-apple-darwin.tar.gz" | awk '{print $1}')
+          intel_sha=$(shasum -a 256 "dist/hkpollution-${TAG}-x86_64-apple-darwin.tar.gz" | awk '{print $1}')
+          mkdir -p tap/Formula
+          cat > tap/Formula/hkpollution.rb <<RUBY
+          class Hkpollution < Formula
+            desc "Hong Kong air quality (AQHI) and weather from official open data"
+            homepage "https://github.com/${{ github.repository }}"
+            version "${VERSION}"
+            license "MIT"
+
+            on_macos do
+              on_arm do
+                url "${base}/hkpollution-${TAG}-aarch64-apple-darwin.tar.gz"
+                sha256 "${arm_sha}"
+              end
+              on_intel do
+                url "${base}/hkpollution-${TAG}-x86_64-apple-darwin.tar.gz"
+                sha256 "${intel_sha}"
+              end
+            end
+
+            def install
+              bin.install "hkpollution"
+            end
+
+            test do
+              assert_match "hkpollution #{version}", shell_output("#{bin}/hkpollution --version")
+            end
+          end
+          RUBY
+
+      - name: Push to the tap
+        if: env.BREW_TOKEN != ''
+        env:
+          GH_TOKEN: ${{ secrets.BREW_TOKEN }}
+        run: |
+          set -euo pipefail
+          if ! gh repo view hongkong-ai-labs/homebrew-tap >/dev/null 2>&1; then
+            echo "hongkong-ai-labs/homebrew-tap does not exist; skipping" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          git clone "https://x-access-token:${GH_TOKEN}@github.com/hongkong-ai-labs/homebrew-tap.git" tap-repo
+          mkdir -p tap-repo/Formula
+          cp tap/Formula/hkpollution.rb tap-repo/Formula/hkpollution.rb
+          cd tap-repo
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/hkpollution.rb
+          if git diff --cached --quiet; then
+            echo "formula unchanged" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          git commit -m "hkpollution ${VERSION}"
+          git push origin HEAD:main

@@ -115,3 +115,44 @@ The places where `SPEC.md` left a choice open, and the reading taken.
   extremes.
 - **Timestamp conversion handles RFC 2822, ISO-8601 and `GMT`/`Z` offsets** and
   falls back to the trimmed input when it understands neither.
+
+## Reliability, advice and brief
+
+- **The English advice table is compiled in, not fetched.** It is EPD's published
+  wording from aqhi.gov.hk ("Recommended Precautionary Actions"), pinned in
+  `src/advice.rs`; the one typographic change is `physicalexertion` →
+  `physical exertion`. Health advice is the last place to machine-translate or to
+  let an undocumented endpoint gate, so an app API outage only costs the Chinese
+  text, never the English.
+- **`--lang` defaults to `en`.** `tc` and `both` make the network call; if it fails
+  while English was also requested, the English rows still print and a warning goes
+  to stderr. `source` reports `EPD` for the compiled table and `EPD app API` when
+  the Chinese rows came from upstream.
+- **`brief` degrades per part.** Each of place/street/station/weather is attempted
+  independently; a failure records `<part>_error` and sets `partial: true`. The
+  command only fails when both the street model and the nearest station failed,
+  because then there is no AQHI to report at all.
+- **The advice attached to `brief` uses the worse of the street and station AQHI.**
+  Street values are modelled at a point, station values are measured; taking the
+  higher is the conservative reading.
+- **`--fail-above` exits 3, not 1.** A threshold breach is not an upstream failure,
+  and cron should be able to tell them apart. Exit 1 keeps its meaning.
+- **Cache keys are FNV-1a 64 of the URL**, deliberately not a cryptographic hash:
+  this is a local filename, and collision risk on a handful of URLs is irrelevant.
+  TTLs live next to each URL constant (300 s current readings, 900 s forecast,
+  1800 s station detail, 86 400 s static advice/about pages). Cache I/O never
+  fails a command.
+- **`summary` computes its trend from the worst station only**, one extra
+  `/monitors/{id}` request, cached for 30 minutes. `--no-trend` skips it entirely.
+  The window is the 4 newest hourly points; `hours` in the payload is the span
+  actually compared, not the window requested.
+- **`map` returns a link.** The tile is a PNG with an ephemeral UUID filename, so
+  the payload documents the coverage and timestamp and says plainly that it is not
+  parsable data. The `ts` parameter must be ISO-8601; a Unix epoch is rejected by
+  upstream with `{"status":-1,"msg":"ts is invalid"}`, which is why the default is
+  formatted as `YYYY-MM-DDTHH:00:00.000Z` in UTC.
+- **`doctor` bypasses the cache.** It is a diagnostic, so it must measure the live
+  path; its schema checks assert the top-level keys each parser requires.
+- **MCP negotiates protocol revisions** rather than pinning one: a client asking
+  for `2024-11-05` keeps it, everything else gets `2025-06-18`. `structuredContent`
+  duplicates the text payload so both tooling generations work.

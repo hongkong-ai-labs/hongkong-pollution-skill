@@ -6,9 +6,9 @@
 
 **Hong Kong air quality in one binary.**
 
-Current AQHI, pollutant concentrations, a network summary and HKO weather —
-plus tomorrow's forecast and street-level model data — from official open
-data, as a CLI for humans and an MCP server for agents.
+Current AQHI, pollutant concentrations, forecasts, street-level model data and
+the official health advice — from official open data, as a CLI for humans and an
+MCP server for agents.
 
 [![CI](https://github.com/hongkong-ai-labs/hongkong-pollution-skill/actions/workflows/ci.yml/badge.svg)](https://github.com/hongkong-ai-labs/hongkong-pollution-skill/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/hongkong-ai-labs/hongkong-pollution-skill?style=flat-square&color=0e9488)](https://github.com/hongkong-ai-labs/hongkong-pollution-skill/releases/latest)
@@ -46,17 +46,29 @@ aarch64, static musl), checksum-verified, into `~/.local/bin`:
 curl -fsSL https://raw.githubusercontent.com/hongkong-ai-labs/hongkong-pollution-skill/main/scripts/install.sh | sh
 ```
 
-**From source** — Rust 1.85 or newer, no C toolchain needed:
+**From source or crates.io** — Rust 1.85 or newer, no C toolchain needed:
 
 ```sh
-cargo install --git https://github.com/hongkong-ai-labs/hongkong-pollution-skill --locked
+cargo install hkpollution --locked
+```
+
+**Homebrew** (once the tap is published):
+
+```sh
+brew tap hongkong-ai-labs/tap && brew install hkpollution
+```
+
+**Container** — a 3 MB `scratch` image on both architectures:
+
+```sh
+docker run --rm ghcr.io/hongkong-ai-labs/hkpollution aqhi --json
 ```
 
 Whichever route you take:
 
 ```console
 $ hkpollution --version
-hkpollution 0.2.0
+hkpollution 0.3.0
 ```
 
 ## What you get
@@ -68,8 +80,12 @@ hkpollution 0.2.0
 | `hkpollution forecast` | Tomorrow's AQHI range per period, split into general and roadside stations, from the EPD app API | table or `--json` |
 | `hkpollution history` | Hourly AQHI and NO2/O3/SO2/CO/PM10/PM2.5 per station, newest first, from the EPD app API | table or `--json` |
 | `hkpollution street` | PRAISE-HK street-level AQHI, added health risk and pollutants for one coordinate | table or `--json` |
-| `hkpollution summary` | Network worst/mean AQHI, risk counts, worst PM2.5 and NO2 station, optional HKO weather | table or `--json` |
-| `hkpollution weather` | HKO temperature, humidity and active warnings | table or `--json` |
+| `hkpollution summary` | Network worst/mean AQHI, risk counts, worst PM2.5 and NO2 station, 4-hour trend, optional HKO weather | table or `--json` |
+| `hkpollution weather` | HKO temperature, humidity and warnings, optionally the nine-day forecast | table or `--json` |
+| `hkpollution advice` | Official EPD precautionary actions per AQHI risk band, English and/or Chinese | table or `--json` |
+| `hkpollution brief` | One call for a coordinate: place, street AQHI, nearest station, weather and advice | report or `--json` |
+| `hkpollution map` | PRAISE-HK raster tile link for a bounding box | report or `--json` |
+| `hkpollution about` | The app's about pages, privacy policy and long-term air quality links | report or `--json` |
 | `hkpollution mcp` | All of the above as MCP tools over stdio | JSON-RPC |
 
 The four documented datasets read official endpoints only. `forecast`,
@@ -124,6 +140,7 @@ window is null.
 | `0` | Success |
 | `1` | Network, upstream or I/O failure — including a `--station` that matches nothing |
 | `2` | Usage error (unknown command or flag, bad `--hours`) |
+| `3` | `--fail-above` threshold reached — a finding, not a failure |
 
 Errors always go to stderr, so `--json` output stays pipeable.
 
@@ -197,11 +214,85 @@ source: PRAISE-HK street-level model © HKUST Institute for the Environment (fet
 is the added health risk, and `-` is a value the model does not publish for
 that hour.
 
+### One-call briefing
+
+`brief` answers the question people actually ask — "what is the air like where I am?"
+— with one request: the place name, the street-level model, the nearest official
+station and its distance, the weather, and the advice that applies.
+
+```console
+$ hkpollution brief --lat 22.3375 --lng 114.263
+place:    THE HONG KONG UNIVERSITY OF SCIENCE AND TECHNOLOGY (22.3375, 114.2630)
+street:   AQHI 4 · added risk 6.1% · 2026-11-21 20:00
+station:  Tseung Kwan O (2.2 km away) AQHI 4 · Moderate · 2026-11-21 19:30
+weather:  20.0 C · 45 % humidity · The Fire Danger Warning is Red and the fire risk is extreme.
+
+advice for Moderate (AQHI 4-6):
+  general public         No response action is required.
+  heart and respiratory  No response action is normally required. Individuals who are experiencing symptoms are advised to consider reducing outdoor physical exertion.
+
+source: EPD / PRAISE-HK / HKO (fetched 2026-11-21T20:53:52+08:00)
+```
+
+Each part is fetched independently: if one upstream is down the report still comes
+back with `partial: true` and a `<part>_error` field, and the command only fails when
+both the street model and the station failed.
+
+### Health advice
+
+`advice` prints EPD's own precautionary actions. The English table is compiled in from
+the AQHI website, so it works even when the app API is unreachable; `--lang tc` or
+`--lang both` adds the upstream Traditional Chinese text.
+
+```console
+$ hkpollution advice --risk high
+High (AQHI 7)
+  heart and respiratory  People with existing heart or respiratory illnesses are advised to reduce outdoor physical exertion, and to reduce the time of their stay outdoors, especially in areas with heavy traffic. They should also seek advice from a medical doctor before participating in sport activities and take more breaks during physical activities.
+  children and elderly   Children and the elderly are advised to reduce outdoor physical exertion, and to reduce the time of their stay outdoors, especially in areas with heavy traffic.
+  outdoor workers        No response action is required.
+  general public         No response action is required.
+
+source: EPD health advice (fetched 2026-11-21T20:53:48+08:00)
+```
+
+## Reliability
+
+Built for agents that call the same tool in a loop, and for cron jobs that need a
+verdict rather than prose.
+
+| Concern | Behaviour |
+| --- | --- |
+| Repeat calls | On-disk TTL cache in `~/.cache/hkpollution`: 5 min for current readings, 15 min for forecasts, 30 min for station history, 24 h for static pages. `--no-cache`, `--max-age <secs>`, `--refresh` |
+| Flaky upstreams | Up to 3 attempts with 300 ms / 900 ms backoff for transport errors, 5xx and 429, honouring `Retry-After` |
+| Thresholds | `--fail-above 7` exits `3` when the worst AQHI reaches it, so `hkpollution aqhi --fail-above 7` is a monitoring check with no parsing |
+| Needing a station name | `--near 22.3375,114.263` resolves to the nearest of the 18 stations and prints the distance |
+| Drift and outages | `hkpollution doctor` probes all nine sources, reports latency and a schema check, and prints the cache location and size |
+| Tuning | `HKPOLLUTION_CACHE_DIR`, `HKPOLLUTION_TIMEOUT_SECS`, `HKPOLLUTION_RETRIES` |
+
+```console
+$ hkpollution doctor
+SOURCE                  STATUS  MS   DETAIL
+----------------------  ------  ---  -----------
+data.gov.hk AQHI        ok      103  1701 bytes
+aqhi.gov.hk RSS         ok      40   7222 bytes
+aqhi.gov.hk 24pc        ok      55   98211 bytes
+HKO rhrread             ok      31   2951 bytes
+HKO fnd                 ok      33   4364 bytes
+EPD app forecast        ok      63   699 bytes
+EPD app monitors        ok      29   3960 bytes
+PRAISE weather          ok      74   47 bytes
+PRAISE pollutant_index  ok      607  13131 bytes
+
+summary: 9 ok, 0 failed
+```
+
 ## MCP server
 
 `hkpollution mcp` speaks JSON-RPC 2.0 over stdio — one JSON object per line,
-protocol revision `2024-11-05`. Point any stdio-capable MCP client at the
-binary:
+protocol revision `2025-06-18`, negotiated down to `2024-11-05` when a client
+asks for it. Every tool is annotated read-only and idempotent, declares an output
+schema, and returns `structuredContent` alongside the text payload, so clients can
+cache and auto-approve calls. Point any stdio-capable MCP client at the binary:
 
 ```json
 {
@@ -220,6 +311,9 @@ binary:
 | `pollutant_concentrations` | `{ "station"?: string, "hours"?: integer 1-24 }` | Latest reading plus the hourly series, per station |
 | `pollution_summary` | `{ "include_weather"?: boolean }` | The CLI `summary` payload |
 | `hong_kong_weather` | `{}` | The CLI `weather` payload |
+| `air_quality_briefing` | `{ "lat": number, "lng": number, "no_cache"?: boolean }` | The CLI `brief` payload |
+| `health_advice` | `{ "risk"?: string, "lang"?: "en"\|"tc"\|"both" }` | The CLI `advice` payload |
+| `source_health` | `{}` | The CLI `doctor` payload |
 | `aqhi_forecast` | `{}` | The CLI `forecast` payload |
 | `station_history` | `{ "station"?: string, "hours"?: integer 1-23 }` | Hourly AQHI and pollutant history per station, newest first |
 | `street_level_aqhi` | `{ "lat": number, "lng": number, "hours"?: integer 1-48 }` | The CLI `street` payload |
@@ -234,7 +328,7 @@ $ printf '%s\n' \
     '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
     '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' \
   | hkpollution mcp
-{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2024-11-05","capabilities":{"tools":{}},"serverInfo":{"name":"hongkong-pollution-skill","version":"0.2.0"}}}
+{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2024-11-05","capabilities":{"tools":{}},"serverInfo":{"name":"hongkong-pollution-skill","version":"0.3.0"}}}
 {"jsonrpc":"2.0","id":2,"result":{"tools":[ ... ]}}
 ```
 
@@ -250,7 +344,10 @@ server keeps serving until stdin closes.
 | EPD 24-hour pollutant concentrations (XML) | `https://www.aqhi.gov.hk/epd/ddata/html/out/24pc_Eng.xml` | Hourly NO2/O3/SO2/CO/PM10/PM2.5, µg/m³ |
 | HKO current readings (JSON) | `https://data.weather.gov.hk/weatherAPI/opendata/weather.php?dataType=rhrread&lang=en` | Temperature, humidity, warnings |
 | EPD app API (JSON, undocumented) | `https://app.epd-asmg.gov.hk/api/v2/forecast`, `https://app.epd-asmg.gov.hk/api/v2/monitors` | Tomorrow's AQHI range, hourly per-station history |
+| HKO nine-day forecast (JSON) | `https://data.weather.gov.hk/weatherAPI/opendata/weather.php?dataType=fnd&lang=en` | `weather --forecast` |
 | PRAISE-HK model API (JSON, undocumented) | `https://praise-web.ust.hk:8443/api/pollutant_index` | Street-level AQHI, added health risk and pollutants at a coordinate |
+| PRAISE-HK reverse geocoding | `https://praise-web.ust.hk:8443/location/reverse_geocoding` | Place names in `brief` |
+| PRAISE-HK spatial tiles | `https://praise-web.ust.hk:8443/api/pollutant_spatial_tiles` | Raster tile links in `map` |
 
 A `source` of `EPD app API` or `PRAISE-HK` marks a report from one of those
 undocumented app APIs; `EPD` and `HKO` keep their existing meaning.
@@ -351,7 +448,7 @@ A `justfile` holds the everyday commands (`brew install just` if you need it):
 | `just audit` | `cargo audit` against the lockfile |
 | `just skill-check` | Validate `SKILL.md` and shell syntax the way CI does |
 | `just version` | Print the release tag for the current `Cargo.toml` version |
-| `just release 0.3.0` | Tag and push; the release workflow does the rest |
+| `just release 0.4.0` | Tag and push; the release workflow does the rest |
 
 Layout:
 
@@ -378,25 +475,38 @@ recorded in [`NOTES.md`](NOTES.md).
 ## Releasing
 
 ```sh
-just release 0.3.0
+just release 0.4.0
 ```
 
-That creates and pushes the annotated tag `v0.3.0`;
+That creates and pushes the annotated tag `v0.4.0`;
 [`.github/workflows/release.yml`](.github/workflows/release.yml) then checks the
 tag against `Cargo.toml` and `CHANGELOG.md`, builds four targets, smoke-tests
 the native ones, and publishes a GitHub release:
 
 | Asset | Target |
 | --- | --- |
-| `hkpollution-v0.3.0-aarch64-apple-darwin.tar.gz` | macOS, Apple silicon |
-| `hkpollution-v0.3.0-x86_64-apple-darwin.tar.gz` | macOS, Intel |
-| `hkpollution-v0.3.0-x86_64-unknown-linux-musl.tar.gz` | Linux, x86_64 (static) |
-| `hkpollution-v0.3.0-aarch64-unknown-linux-musl.tar.gz` | Linux, aarch64 (static) |
+| `hkpollution-v0.4.0-aarch64-apple-darwin.tar.gz` | macOS, Apple silicon |
+| `hkpollution-v0.4.0-x86_64-apple-darwin.tar.gz` | macOS, Intel |
+| `hkpollution-v0.4.0-x86_64-unknown-linux-musl.tar.gz` | Linux, x86_64 (static) |
+| `hkpollution-v0.4.0-aarch64-unknown-linux-musl.tar.gz` | Linux, aarch64 (static) |
 | `SHA256SUMS` | Checksums for every tarball |
+
+The same run also publishes `ghcr.io/hongkong-ai-labs/hkpollution:<tag>` and
+`:latest` (multi-arch, from the static musl builds) and, when a `BREW_TOKEN`
+secret with repo scope exists, regenerates `Formula/hkpollution.rb` in
+`hongkong-ai-labs/homebrew-tap` from the two macOS sha256s.
 
 `scripts/install.sh` reads the latest release, so re-running the one-liner
 upgrades an installed binary and leaves an up-to-date one alone. Installed
 skills update with `npx skills update`.
+
+### Drift detection
+
+Both app APIs are undocumented, so a nightly job runs every command against the
+live sources, compares the top-level payload keys with `tests/schema/*.json`,
+runs `doctor`, and opens (or updates) a single `drift` issue when something moved.
+Locally the same check is `./scripts/check-drift.sh`, with `--update` to re-record
+the snapshots after an intentional change.
 
 ## License
 

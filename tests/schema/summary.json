@@ -1,0 +1,10 @@
+[
+  "fetched_at",
+  "mean_aqhi",
+  "risk_counts",
+  "source",
+  "stations",
+  "worst",
+  "worst_no2",
+  "worst_pm25"
+]

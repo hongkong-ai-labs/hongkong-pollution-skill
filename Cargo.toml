@@ -1,12 +1,15 @@
 [package]
 name = "hongkong-pollution-skill"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 rust-version = "1.85"
 description = "Hong Kong air pollution CLI and MCP stdio server backed by EPD AQHI and HKO open data"
 license = "MIT"
 repository = "https://github.com/hongkong-ai-labs/hongkong-pollution-skill"
 readme = "README.md"
+homepage = "https://github.com/hongkong-ai-labs/hongkong-pollution-skill"
+documentation = "https://github.com/hongkong-ai-labs/hongkong-pollution-skill#readme"
+exclude = ["tests/fixtures/*", "tests/schema/*", ".github/*", ".worktrees/*"]
 keywords = ["hong-kong", "air-quality", "aqhi", "mcp", "cli"]
 categories = ["command-line-utilities"]
 

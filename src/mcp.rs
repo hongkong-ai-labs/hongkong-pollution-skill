@@ -13,8 +13,11 @@ use crate::error::{Error, Result};
 use crate::model::resolve_station;
 use crate::{VERSION, aqhi, brief, doctor, epd_app, http, pollutants, praise, weather};
 
-/// MCP protocol revision this server implements.
-pub const PROTOCOL_VERSION: &str = "2024-11-05";
+/// Newest MCP protocol revision this server implements.
+pub const PROTOCOL_VERSION: &str = "2025-06-18";
+
+/// Revisions this server still answers for older clients.
+pub const SUPPORTED_VERSIONS: [&str; 2] = ["2025-06-18", "2024-11-05"];
 
 const PARSE_ERROR: i64 = -32700;
 const INVALID_REQUEST: i64 = -32600;
@@ -75,7 +78,7 @@ fn dispatch(request: &Value) -> Option<Value> {
         return None;
     }
     match method {
-        "initialize" => Some(success(id, initialize_result())),
+        "initialize" => Some(success(id, initialize_result(request.get("params")))),
         "ping" => Some(success(id, json!({}))),
         "tools/list" => Some(success(id, tools_list())),
         "tools/call" => Some(call_tool(id, request.get("params"))),
@@ -87,16 +90,23 @@ fn dispatch(request: &Value) -> Option<Value> {
     }
 }
 
-fn initialize_result() -> Value {
+/// Answer `initialize`, echoing the client's revision when it is one we speak.
+fn initialize_result(params: Option<&Value>) -> Value {
+    let requested = params
+        .and_then(|value| value.get("protocolVersion"))
+        .and_then(Value::as_str);
+    let version = requested
+        .filter(|value| SUPPORTED_VERSIONS.contains(value))
+        .unwrap_or(PROTOCOL_VERSION);
     json!({
-        "protocolVersion": PROTOCOL_VERSION,
+        "protocolVersion": version,
         "capabilities": { "tools": {} },
         "serverInfo": { "name": "hongkong-pollution-skill", "version": VERSION }
     })
 }
 
 fn tools_list() -> Value {
-    json!({
+    let mut value = json!({
         "tools": [
             {
                 "name": "air_quality_aqhi",
@@ -279,7 +289,29 @@ fn tools_list() -> Value {
                 }
             }
         ]
-    })
+    });
+    // Every tool is a read-only, idempotent query against public data, and every
+    // result is a JSON object, so the hints and the permissive output schema are
+    // identical for all of them.
+    if let Some(tools) = value.get_mut("tools").and_then(Value::as_array_mut) {
+        for tool in tools.iter_mut() {
+            if let Some(object) = tool.as_object_mut() {
+                object.insert(
+                    "annotations".to_string(),
+                    json!({
+                        "readOnlyHint": true,
+                        "idempotentHint": true,
+                        "openWorldHint": true
+                    }),
+                );
+                object.insert(
+                    "outputSchema".to_string(),
+                    json!({ "type": "object", "additionalProperties": true }),
+                );
+            }
+        }
+    }
+    value
 }
 
 fn call_tool(id: Option<Value>, params: Option<&Value>) -> Value {
@@ -331,6 +363,7 @@ fn tool_payload(outcome: Result<Value>) -> Value {
                 .unwrap_or_else(|error| format!("{{\"error\":\"{error}\"}}"));
             json!({
                 "content": [{ "type": "text", "text": text }],
+                "structuredContent": value,
                 "isError": false
             })
         }

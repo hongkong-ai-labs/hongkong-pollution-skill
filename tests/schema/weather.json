@@ -1,0 +1,8 @@
+[
+  "forecast",
+  "humidity",
+  "source",
+  "temperature",
+  "update_time",
+  "warnings"
+]

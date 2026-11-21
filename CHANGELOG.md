@@ -6,6 +6,43 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-21
+
+### Added
+
+- `hkpollution brief --lat --lng`: one call for "what is the air like here" —
+  reverse-geocoded place, street-level AQHI and added health risk, nearest EPD
+  station with distance, HKO weather, and the advice for the worse of the two
+  AQHI values. Parts degrade independently (`partial: true`, `*_error` fields).
+- `hkpollution advice [--risk] [--lang en|tc|both]`: the official EPD
+  precautionary actions per AQHI band. The English table is compiled in from
+  aqhi.gov.hk, so it survives an app API outage; `tc`/`both` add the upstream
+  Traditional Chinese text.
+- `hkpollution weather --forecast`: the HKO nine-day forecast (general situation
+  plus temperature, humidity and rain probability per day).
+- `hkpollution map --bbox`: the PRAISE-HK raster tile URL for a bounding box,
+  documented as a link to a generated PNG rather than data.
+- `hkpollution about`: the app API about pages.
+- `hkpollution doctor`: probes all nine sources with latency and a schema check,
+  and reports the cache directory and size.
+- `summary` gains `trend` (rising/falling/steady over the last hours at the worst
+  station), with `--no-trend` to skip the extra request.
+- `--near lat,lng` resolves coordinates to the nearest of the 18 stations, as an
+  alternative to `--station`.
+- `--fail-above N` exits 3 when the worst AQHI reaches N, for cron and CI guards.
+- On-disk TTL cache under `~/.cache/hkpollution` with `--no-cache`, `--max-age`
+  and `--refresh`; MCP tools accept `no_cache`.
+- HTTP retries with backoff and `Retry-After` for transport errors, 5xx and 429.
+- Multi-arch container image `ghcr.io/hongkong-ai-labs/hkpollution` built from
+  the static musl binaries on every tag, a `Dockerfile`, and a Homebrew formula
+  published to `hongkong-ai-labs/homebrew-tap` when `BREW_TOKEN` is set.
+- crates.io metadata (`cargo install hkpollution`) and a nightly drift workflow
+  that compares live payload shapes with `tests/schema/` and files one issue.
+- MCP: protocol revision `2025-06-18` with negotiation down to `2024-11-05`,
+  `structuredContent` on every tool result, per-tool `outputSchema` and
+  read-only annotations, plus `air_quality_briefing`, `health_advice` and
+  `source_health` tools.
+
 ## [0.2.0] - 2026-11-21
 
 ### Added
@@ -62,6 +99,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Thin-LTO, single-codegen-unit, stripped release profile for smaller
   binaries.
 
-[Unreleased]: https://github.com/hongkong-ai-labs/hongkong-pollution-skill/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/hongkong-ai-labs/hongkong-pollution-skill/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/hongkong-ai-labs/hongkong-pollution-skill/releases/tag/v0.3.0
 [0.2.0]: https://github.com/hongkong-ai-labs/hongkong-pollution-skill/releases/tag/v0.2.0
 [0.1.0]: https://github.com/hongkong-ai-labs/hongkong-pollution-skill/releases/tag/v0.1.0
