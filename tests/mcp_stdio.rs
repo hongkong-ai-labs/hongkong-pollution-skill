@@ -79,6 +79,24 @@ fn mcp_answers_initialize_tools_list_ping_and_unknown_methods() {
         "method": "tools/call",
         "params": { "name": "station_history", "arguments": { "hours": 24 } }
     }));
+    server.send(&json!({
+        "jsonrpc": "2.0",
+        "id": 7,
+        "method": "tools/call",
+        "params": {
+            "name": "street_level_aqhi",
+            "arguments": { "lat": 22.3, "lng": 114.2, "hours": 49 }
+        }
+    }));
+    server.send(&json!({
+        "jsonrpc": "2.0",
+        "id": 8,
+        "method": "tools/call",
+        "params": {
+            "name": "street_level_aqhi",
+            "arguments": { "lat": 22.0, "lng": 114.2 }
+        }
+    }));
 
     let initialize = server.receive();
     assert_eq!(initialize["jsonrpc"], "2.0");
@@ -112,7 +130,8 @@ fn mcp_answers_initialize_tools_list_ping_and_unknown_methods() {
             "hong_kong_weather",
             "pollutant_concentrations",
             "pollution_summary",
-            "station_history"
+            "station_history",
+            "street_level_aqhi"
         ]
     );
     for tool in tools {
@@ -140,6 +159,12 @@ fn mcp_answers_initialize_tools_list_ping_and_unknown_methods() {
         history["inputSchema"]["properties"]["station"]["type"],
         "string"
     );
+    let street = tools
+        .iter()
+        .find(|tool| tool["name"] == "street_level_aqhi")
+        .unwrap();
+    assert_eq!(street["inputSchema"]["properties"]["hours"]["maximum"], 48);
+    assert_eq!(street["inputSchema"]["required"], json!(["lat", "lng"]));
 
     let ping = server.receive();
     assert_eq!(ping["id"], 3);
@@ -163,6 +188,22 @@ fn mcp_answers_initialize_tools_list_ping_and_unknown_methods() {
         .as_str()
         .expect("error text");
     assert!(message.contains("23"), "message: {message}");
+
+    let bad_street_hours = server.receive();
+    assert_eq!(bad_street_hours["id"], 7);
+    assert_eq!(bad_street_hours["result"]["isError"], true);
+    let message = bad_street_hours["result"]["content"][0]["text"]
+        .as_str()
+        .expect("error text");
+    assert!(message.contains("48"), "message: {message}");
+
+    let bad_street_lat = server.receive();
+    assert_eq!(bad_street_lat["id"], 8);
+    assert_eq!(bad_street_lat["result"]["isError"], true);
+    let message = bad_street_lat["result"]["content"][0]["text"]
+        .as_str()
+        .expect("error text");
+    assert!(message.contains("22.1"), "message: {message}");
 
     server.close_stdin();
     let status = server.child.wait().expect("server exits on EOF");

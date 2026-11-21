@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 
 use crate::error::{Error, Result};
 use crate::model::resolve_station;
-use crate::{VERSION, aqhi, epd_app, pollutants, weather};
+use crate::{VERSION, aqhi, epd_app, pollutants, praise, weather};
 
 /// MCP protocol revision this server implements.
 pub const PROTOCOL_VERSION: &str = "2024-11-05";
@@ -188,6 +188,32 @@ fn tools_list() -> Value {
                     },
                     "additionalProperties": false
                 }
+            },
+            {
+                "name": "street_level_aqhi",
+                "description": "PRAISE-HK street-level AQHI, added health risk and pollutant \
+                                forecast at a Hong Kong latitude/longitude (undocumented endpoint).",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "lat": {
+                            "type": "number",
+                            "description": "Latitude in Hong Kong (22.1-22.6)."
+                        },
+                        "lng": {
+                            "type": "number",
+                            "description": "Longitude in Hong Kong (113.8-114.5)."
+                        },
+                        "hours": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 48,
+                            "description": "Hourly rows to return (default 24)."
+                        }
+                    },
+                    "required": ["lat", "lng"],
+                    "additionalProperties": false
+                }
             }
         ]
     })
@@ -211,6 +237,7 @@ fn call_tool(id: Option<Value>, params: Option<&Value>) -> Value {
         "hong_kong_weather" => tool_weather(),
         "aqhi_forecast" => tool_forecast(),
         "station_history" => tool_history(&arguments),
+        "street_level_aqhi" => tool_street(&arguments),
         other => {
             return error_response(id, INVALID_PARAMS, &format!("unknown tool: {other}"));
         }
@@ -295,6 +322,29 @@ fn tool_history(arguments: &Value) -> Result<Value> {
     }
     let station = arguments.get("station").and_then(Value::as_str);
     let report = epd_app::fetch_history(station, hours)?;
+    Ok(serde_json::to_value(&report)?)
+}
+
+fn tool_street(arguments: &Value) -> Result<Value> {
+    let lat = arguments
+        .get("lat")
+        .and_then(Value::as_f64)
+        .ok_or_else(|| Error::usage("lat must be a number"))?;
+    let lng = arguments
+        .get("lng")
+        .and_then(Value::as_f64)
+        .ok_or_else(|| Error::usage("lng must be a number"))?;
+    let hours = match arguments.get("hours") {
+        None | Some(Value::Null) => praise::DEFAULT_HOURS,
+        Some(value) => value
+            .as_u64()
+            .and_then(|raw| u32::try_from(raw).ok())
+            .ok_or_else(|| Error::usage("hours must be an integer between 1 and 48"))?,
+    };
+    if hours == 0 || hours > praise::MAX_HOURS {
+        return Err(Error::usage("hours must be between 1 and 48"));
+    }
+    let report = praise::fetch(lat, lng, hours)?;
     Ok(serde_json::to_value(&report)?)
 }
 
