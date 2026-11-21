@@ -31,6 +31,138 @@ pub const AQHI_STATIONS: [&str; 18] = [
     "Mong Kok",
 ];
 
+/// One monitoring station's published coordinates.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct StationCoord {
+    /// Canonical station name, matching [`AQHI_STATIONS`].
+    pub station: &'static str,
+    /// Latitude in degrees.
+    pub lat: f64,
+    /// Longitude in degrees.
+    pub lng: f64,
+}
+
+/// Coordinates of the 18 EPD monitoring stations, as published in the app API
+/// `/monitors` payload.
+pub const STATION_COORDS: [StationCoord; 18] = [
+    StationCoord {
+        station: "Central/Western",
+        lat: 22.2849,
+        lng: 114.1441,
+    },
+    StationCoord {
+        station: "Southern",
+        lat: 22.2475,
+        lng: 114.16,
+    },
+    StationCoord {
+        station: "Eastern",
+        lat: 22.2829,
+        lng: 114.2194,
+    },
+    StationCoord {
+        station: "Kwun Tong",
+        lat: 22.3096,
+        lng: 114.2311,
+    },
+    StationCoord {
+        station: "Sham Shui Po",
+        lat: 22.3301,
+        lng: 114.1589,
+    },
+    StationCoord {
+        station: "Kwai Chung",
+        lat: 22.3568,
+        lng: 114.1293,
+    },
+    StationCoord {
+        station: "Tsuen Wan",
+        lat: 22.3717,
+        lng: 114.1144,
+    },
+    StationCoord {
+        station: "Tseung Kwan O",
+        lat: 22.318,
+        lng: 114.2594,
+    },
+    StationCoord {
+        station: "Yuen Long",
+        lat: 22.4455,
+        lng: 114.0232,
+    },
+    StationCoord {
+        station: "Tuen Mun",
+        lat: 22.3911,
+        lng: 113.9767,
+    },
+    StationCoord {
+        station: "Tung Chung",
+        lat: 22.2889,
+        lng: 113.9436,
+    },
+    StationCoord {
+        station: "Tai Po",
+        lat: 22.451,
+        lng: 114.1641,
+    },
+    StationCoord {
+        station: "Sha Tin",
+        lat: 22.3765,
+        lng: 114.1847,
+    },
+    StationCoord {
+        station: "North",
+        lat: 22.4968,
+        lng: 114.1262,
+    },
+    StationCoord {
+        station: "Tap Mun",
+        lat: 22.4712,
+        lng: 114.3608,
+    },
+    StationCoord {
+        station: "Causeway Bay",
+        lat: 22.2801,
+        lng: 114.1851,
+    },
+    StationCoord {
+        station: "Central",
+        lat: 22.2819,
+        lng: 114.158,
+    },
+    StationCoord {
+        station: "Mong Kok",
+        lat: 22.3226,
+        lng: 114.1683,
+    },
+];
+
+/// Great-circle distance between two coordinates, in kilometres.
+#[must_use]
+pub fn haversine_km(lat1: f64, lng1: f64, lat2: f64, lng2: f64) -> f64 {
+    const EARTH_RADIUS_KM: f64 = 6_371.0;
+    let delta_lat = (lat2 - lat1).to_radians();
+    let delta_lng = (lng2 - lng1).to_radians();
+    let a = (delta_lat / 2.0).sin().powi(2)
+        + lat1.to_radians().cos() * lat2.to_radians().cos() * (delta_lng / 2.0).sin().powi(2);
+    2.0 * EARTH_RADIUS_KM * a.sqrt().asin()
+}
+
+/// Nearest station to `(lat, lng)` and its distance in kilometres.
+#[must_use]
+pub fn nearest_station(lat: f64, lng: f64) -> (&'static str, f64) {
+    let mut best = STATION_COORDS[0];
+    let mut best_distance = haversine_km(lat, lng, best.lat, best.lng);
+    for station in STATION_COORDS.iter().skip(1) {
+        let distance = haversine_km(lat, lng, station.lat, station.lng);
+        if distance < best_distance {
+            best = *station;
+            best_distance = distance;
+        }
+    }
+    (best.station, best_distance)
+}
+
 /// One monitor in the undocumented EPD AQHI app API station table.
 ///
 /// `/monitors` names stations in Traditional Chinese only, so app API payloads
@@ -655,6 +787,12 @@ pub fn rollup(stations: &[AqhiReading]) -> Rollup {
         mean_aqhi: mean(&values),
         risk_counts,
     }
+}
+
+/// Whether the worst AQHI in a payload reaches a `--fail-above` threshold.
+#[must_use]
+pub fn at_or_above(worst_aqhi: Option<i64>, threshold: i64) -> bool {
+    worst_aqhi.is_some_and(|aqhi| aqhi >= threshold)
 }
 
 /// Mean of `values` rounded to one decimal place, or `None` when empty.

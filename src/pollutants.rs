@@ -14,6 +14,9 @@ pub const POLLUTANTS_URL: &str = "https://www.aqhi.gov.hk/epd/ddata/html/out/24p
 /// Largest accepted `--hours` window.
 pub const MAX_HOURS: u32 = 24;
 
+/// Freshness of a cached pollutant feed, in seconds.
+const CACHE_TTL_SECS: u64 = 300;
+
 /// Fetch the 24-hour pollutant feed and window it to `hours` readings per
 /// station.
 ///
@@ -22,7 +25,7 @@ pub const MAX_HOURS: u32 = 24;
 /// Returns [`Error::Http`] for transport failures, [`Error::Parse`] for an
 /// unreadable document and [`Error::Usage`] when `hours` is out of range.
 pub fn fetch(hours: u32) -> Result<PollutantsReport> {
-    let body = http::get_text(POLLUTANTS_URL)?;
+    let body = http::get_cached(POLLUTANTS_URL, CACHE_TTL_SECS)?;
     let parsed = parse::parse_pollutants_xml(&body)?;
     build(parsed, hours)
 }

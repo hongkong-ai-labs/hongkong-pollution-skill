@@ -27,6 +27,15 @@ pub const SOURCE: &str = "EPD app API";
 /// Largest accepted `--hours` window for `history`.
 pub const MAX_HOURS: u32 = 23;
 
+/// Freshness of a cached `/forecast` body, in seconds.
+const FORECAST_CACHE_TTL_SECS: u64 = 900;
+
+/// Freshness of a cached `/monitors` body, in seconds.
+const MONITORS_CACHE_TTL_SECS: u64 = 300;
+
+/// Freshness of one cached `/monitors/{id}` body, in seconds.
+const DETAIL_CACHE_TTL_SECS: u64 = 1_800;
+
 /// Fetch and join tomorrow's AQHI forecast.
 ///
 /// # Errors
@@ -34,7 +43,7 @@ pub const MAX_HOURS: u32 = 23;
 /// Returns [`Error::Http`] for transport failures and [`Error::Parse`] when the
 /// payload cannot be read.
 pub fn fetch_forecast() -> Result<ForecastReport> {
-    let body = http::get_text(FORECAST_URL)?;
+    let body = http::get_cached(FORECAST_URL, FORECAST_CACHE_TTL_SECS)?;
     let periods = parse::parse_forecast_json(&body)?;
     Ok(ForecastReport {
         periods,
@@ -67,7 +76,7 @@ pub fn fetch_history(query: Option<&str>, hours: u32) -> Result<HistoryReport> {
         }
         None => None,
     };
-    let body = http::get_text(MONITORS_URL)?;
+    let body = http::get_cached(MONITORS_URL, MONITORS_CACHE_TTL_SECS)?;
     let mut monitors = parse::parse_monitors_json(&body)?;
     if let Some(ids) = &ids {
         monitors.retain(|monitor| ids.contains(&monitor.id));
@@ -89,7 +98,7 @@ fn fetch_details(monitors: &[MonitorStation]) -> Result<Vec<MonitorDetail>> {
     let mut details = Vec::with_capacity(monitors.len());
     for monitor in monitors {
         let url = format!("{MONITORS_URL}/{}", monitor.id);
-        let body = http::get_text(&url)?;
+        let body = http::get_cached(&url, DETAIL_CACHE_TTL_SECS)?;
         details.push(parse::parse_monitor_detail_json(&body)?);
     }
     Ok(details)

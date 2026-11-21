@@ -23,6 +23,8 @@
 //! ```
 
 pub mod aqhi;
+pub mod cache;
+pub mod doctor;
 pub mod epd_app;
 pub mod error;
 pub mod http;
