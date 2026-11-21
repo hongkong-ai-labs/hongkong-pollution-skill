@@ -7,7 +7,6 @@ description = "Hong Kong air pollution CLI and MCP stdio server backed by EPD AQ
 license = "MIT"
 repository = "https://github.com/hongkong-ai-labs/hongkong-pollution-skill"
 readme = "README.md"
-homepage = "https://github.com/hongkong-ai-labs/hongkong-pollution-skill"
 documentation = "https://github.com/hongkong-ai-labs/hongkong-pollution-skill#readme"
 exclude = ["tests/fixtures/*", "tests/schema/*", ".github/*", ".worktrees/*"]
 keywords = ["hong-kong", "air-quality", "aqhi", "mcp", "cli"]
