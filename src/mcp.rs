@@ -8,9 +8,10 @@ use std::io::{BufRead, Write};
 
 use serde_json::{Value, json};
 
+use crate::advice::{self, Lang};
 use crate::error::{Error, Result};
 use crate::model::resolve_station;
-use crate::{VERSION, aqhi, epd_app, pollutants, praise, weather};
+use crate::{VERSION, aqhi, brief, doctor, epd_app, http, pollutants, praise, weather};
 
 /// MCP protocol revision this server implements.
 pub const PROTOCOL_VERSION: &str = "2024-11-05";
@@ -214,6 +215,68 @@ fn tools_list() -> Value {
                     "required": ["lat", "lng"],
                     "additionalProperties": false
                 }
+            },
+            {
+                "name": "air_quality_briefing",
+                "description": "One-call briefing for a Hong Kong coordinate: place name, \
+                                street-level AQHI and added health risk, the nearest EPD \
+                                station's official AQHI, HKO weather, and the advice that \
+                                applies to the worse of the two AQHI values.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "lat": {
+                            "type": "number",
+                            "description": "Latitude in Hong Kong (22.1-22.6)."
+                        },
+                        "lng": {
+                            "type": "number",
+                            "description": "Longitude in Hong Kong (113.8-114.5)."
+                        },
+                        "no_cache": {
+                            "type": "boolean",
+                            "description": "Bypass the on-disk cache for this call."
+                        }
+                    },
+                    "required": ["lat", "lng"],
+                    "additionalProperties": false
+                }
+            },
+            {
+                "name": "health_advice",
+                "description": "Official EPD precautionary actions per AQHI risk band, for the \
+                                general public, people with heart or respiratory illnesses, \
+                                children and the elderly, and outdoor workers. English is \
+                                compiled in; tc/both read the EPD app API.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "risk": {
+                            "type": "string",
+                            "description": "low, moderate, high, very-high, serious, or an AQHI range such as 4-6."
+                        },
+                        "lang": {
+                            "type": "string",
+                            "enum": ["en", "tc", "both"],
+                            "description": "Advice language (default en)."
+                        },
+                        "no_cache": {
+                            "type": "boolean",
+                            "description": "Bypass the on-disk cache for this call."
+                        }
+                    },
+                    "additionalProperties": false
+                }
+            },
+            {
+                "name": "source_health",
+                "description": "Probe every upstream source once and report latency, failures \
+                                and schema mismatches, plus cache statistics.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": false
+                }
             }
         ]
     })
@@ -230,6 +293,7 @@ fn call_tool(id: Option<Value>, params: Option<&Value>) -> Value {
         .get("arguments")
         .cloned()
         .unwrap_or_else(|| json!({}));
+    apply_call_cache(&arguments);
     let outcome = match name {
         "air_quality_aqhi" => tool_aqhi(&arguments),
         "pollutant_concentrations" => tool_pollutants(&arguments),
@@ -238,11 +302,26 @@ fn call_tool(id: Option<Value>, params: Option<&Value>) -> Value {
         "aqhi_forecast" => tool_forecast(),
         "station_history" => tool_history(&arguments),
         "street_level_aqhi" => tool_street(&arguments),
+        "air_quality_briefing" => tool_brief(&arguments),
+        "health_advice" => tool_advice(&arguments),
+        "source_health" => tool_source_health(),
         other => {
             return error_response(id, INVALID_PARAMS, &format!("unknown tool: {other}"));
         }
     };
+    // A per-call cache override must not leak into the next call.
+    http::configure_cache(false, None);
     success(id, tool_payload(outcome))
+}
+
+/// Honour the optional `no_cache` and `max_age` arguments of a single call.
+fn apply_call_cache(arguments: &Value) {
+    let no_cache = arguments
+        .get("no_cache")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let max_age = arguments.get("max_age").and_then(Value::as_u64);
+    http::configure_cache(no_cache, max_age);
 }
 
 fn tool_payload(outcome: Result<Value>) -> Value {
@@ -296,6 +375,37 @@ fn tool_summary(arguments: &Value) -> Result<Value> {
         .and_then(Value::as_bool)
         .unwrap_or(false);
     let report = aqhi::summary(include_weather)?;
+    Ok(serde_json::to_value(&report)?)
+}
+
+fn tool_brief(arguments: &Value) -> Result<Value> {
+    let lat = arguments
+        .get("lat")
+        .and_then(Value::as_f64)
+        .ok_or_else(|| Error::usage("lat must be a number between 22.1 and 22.6"))?;
+    let lng = arguments
+        .get("lng")
+        .and_then(Value::as_f64)
+        .ok_or_else(|| Error::usage("lng must be a number between 113.8 and 114.5"))?;
+    let report = brief::build(lat, lng)?;
+    Ok(serde_json::to_value(&report)?)
+}
+
+fn tool_advice(arguments: &Value) -> Result<Value> {
+    let lang = match arguments.get("lang").and_then(Value::as_str) {
+        Some(value) => Lang::parse(value)?,
+        None => Lang::En,
+    };
+    let risk = match arguments.get("risk").and_then(Value::as_str) {
+        Some(value) => Some(advice::parse_risk(value)?),
+        None => None,
+    };
+    let report = advice::fetch(lang, risk)?;
+    Ok(serde_json::to_value(&report)?)
+}
+
+fn tool_source_health() -> Result<Value> {
+    let report = doctor::run(&doctor::default_probes());
     Ok(serde_json::to_value(&report)?)
 }
 

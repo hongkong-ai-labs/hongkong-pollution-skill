@@ -22,7 +22,9 @@
 //! assert_eq!(resolve_station("CENTRAL").unwrap().len(), 2);
 //! ```
 
+pub mod advice;
 pub mod aqhi;
+pub mod brief;
 pub mod cache;
 pub mod doctor;
 pub mod epd_app;

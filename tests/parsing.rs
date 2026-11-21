@@ -3,9 +3,9 @@
 use hongkong_pollution_skill::model::{ForecastEntry, ForecastRange};
 use hongkong_pollution_skill::parse::{
     blocks, inner_text, join_forecast, normalize_datetime, parse_aqhi_json, parse_aqhi_rss,
-    parse_forecast_entries, parse_forecast_json, parse_measurement, parse_monitor_detail_json,
-    parse_monitors_json, parse_pollutants_xml, parse_praise_json, parse_weather_json,
-    rfc2822_to_iso, strip_bom,
+    parse_forecast_entries, parse_forecast_json, parse_health_advices_json, parse_measurement,
+    parse_monitor_detail_json, parse_monitors_json, parse_pollutants_xml, parse_praise_json,
+    parse_reverse_geocoding_json, parse_weather_json, rfc2822_to_iso, strip_bom,
 };
 use hongkong_pollution_skill::praise::{build, validate_location};
 
@@ -17,6 +17,8 @@ const EPD_FORECAST: &str = include_str!("fixtures/epd_forecast.json");
 const EPD_MONITORS: &str = include_str!("fixtures/epd_monitors.json");
 const EPD_MONITOR_66: &str = include_str!("fixtures/epd_monitor_66.json");
 const PRAISE: &str = include_str!("fixtures/praise_pollutant_index.json");
+const HEALTH_ADVICES: &str = include_str!("fixtures/epd_health_advices.json");
+const REVERSE_GEOCODING: &str = include_str!("fixtures/praise_reverse_geocoding.json");
 
 #[test]
 fn aqhi_json_yields_every_station() {
@@ -371,4 +373,45 @@ fn monitor_detail_merges_histories_newest_first() {
     );
     assert!(parse_monitor_detail_json("[]").is_err());
     assert!(parse_monitor_detail_json("{\"id\":66}").is_err());
+}
+
+#[test]
+fn parses_health_advice_bands_and_strips_markup() {
+    let rows = parse_health_advices_json(HEALTH_ADVICES).expect("advice fixture parses");
+    assert_eq!(rows.len(), 5, "EPD publishes five bands");
+    for (index, row) in &rows {
+        assert!(*index <= 4);
+        assert!(
+            !row.general_public.is_empty(),
+            "band {index} has general-public advice"
+        );
+        assert!(
+            !row.general_public.contains('<'),
+            "markup must be stripped, got {:?}",
+            row.general_public
+        );
+    }
+    // The low band is the "act as usual" one in both languages.
+    let low = rows
+        .iter()
+        .find(|(index, _)| *index == 0)
+        .map(|(_, row)| row)
+        .expect("low band present");
+    assert!(low.heart_and_respiratory.contains("可如常活動"));
+}
+
+#[test]
+fn rejects_health_advice_that_is_not_an_array() {
+    assert!(parse_health_advices_json("{\"bands\":[]}").is_err());
+    assert!(parse_health_advices_json("[]").is_err());
+}
+
+#[test]
+fn parses_reverse_geocoding_first_result() {
+    assert_eq!(
+        parse_reverse_geocoding_json(REVERSE_GEOCODING).unwrap(),
+        "CHATER ROAD"
+    );
+    assert!(parse_reverse_geocoding_json("{\"success\":false,\"result\":[]}").is_err());
+    assert!(parse_reverse_geocoding_json("{\"success\":true,\"result\":[]}").is_err());
 }

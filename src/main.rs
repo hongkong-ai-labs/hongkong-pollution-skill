@@ -8,7 +8,8 @@ use hongkong_pollution_skill::model::{
     nearest_station, resolve_station, rollup,
 };
 use hongkong_pollution_skill::{
-    Error, Result, VERSION, aqhi, doctor, epd_app, http, mcp, pollutants, praise, weather,
+    Error, Result, VERSION, advice, advice::Lang, aqhi, brief, doctor, epd_app, http, mcp,
+    pollutants, praise, weather,
 };
 
 /// Highest AQHI value accepted by `--fail-above`.
@@ -23,6 +24,8 @@ USAGE:
     hkpollution forecast   [--json]
     hkpollution history    [--station <name> | --near <lat>,<lng>] [--hours <1-23>] [--json]
     hkpollution street     --lat <22.x> --lng <114.x> [--hours <1-48>] [--json]
+    hkpollution advice     [--risk <band>] [--lang <en|tc|both>] [--json]
+    hkpollution brief      --lat <22.x> --lng <114.x> [--fail-above <N>] [--json]
     hkpollution summary    [--station <name> | --near <lat>,<lng>] [--fail-above <N>]
                            [--json] [--with-weather]
     hkpollution weather    [--json]
@@ -39,6 +42,8 @@ OPTIONS:
     --hours <N>        hourly rows kept: 1-24 for `pollutants`, 1-23 for `history`,
                        1-48 for `street` (default 1, 24 for `street`)
     --fail-above <N>   exit 3 when the worst AQHI in the output is N or above (1-11)
+    --risk <band>      low, moderate, high, very-high, serious (or 1-3, 4-6, 7, 8-10, 11)
+    --lang <code>      advice language: en (default), tc, both
     --json             print one JSON object to stdout and nothing else
     --with-weather     add HKO temperature, humidity and warnings to the summary
     --no-cache         bypass the on-disk TTL cache for this run
@@ -93,6 +98,8 @@ fn run(args: &[String]) -> Result<()> {
         "street" => command_street(&args[1..]),
         "summary" => command_summary(&args[1..]),
         "weather" => command_weather(&args[1..]),
+        "advice" => command_advice(&args[1..]),
+        "brief" => command_brief(&args[1..]),
         "doctor" => command_doctor(&args[1..]),
         other => Err(Error::usage(format!("unknown command: {other}"))),
     }
@@ -107,6 +114,8 @@ enum Command {
     Street,
     Summary,
     Weather,
+    Advice,
+    Brief,
     Doctor,
 }
 
@@ -120,6 +129,8 @@ impl Command {
             Self::Street => "street",
             Self::Summary => "summary",
             Self::Weather => "weather",
+            Self::Advice => "advice",
+            Self::Brief => "brief",
             Self::Doctor => "doctor",
         }
     }
@@ -136,7 +147,10 @@ impl Command {
     }
 
     fn allows_fail_above(self) -> bool {
-        matches!(self, Self::Aqhi | Self::History | Self::Summary)
+        matches!(
+            self,
+            Self::Aqhi | Self::History | Self::Summary | Self::Brief
+        )
     }
 
     fn allows_cache(self) -> bool {
@@ -153,7 +167,11 @@ impl Command {
     }
 
     fn allows_location(self) -> bool {
-        matches!(self, Self::Street)
+        matches!(self, Self::Street | Self::Brief)
+    }
+
+    fn allows_advice_flags(self) -> bool {
+        matches!(self, Self::Advice)
     }
 
     fn allows_weather(self) -> bool {
@@ -174,6 +192,8 @@ struct Options {
     lng: Option<f64>,
     max_age: Option<u64>,
     fail_above: Option<i64>,
+    risk: Option<usize>,
+    lang: Option<Lang>,
 }
 
 fn parse_options(args: &[String], command: Command) -> Result<Options> {
@@ -274,6 +294,48 @@ fn parse_options(args: &[String], command: Command) -> Result<Options> {
                 )));
             }
             options.fail_above = Some(threshold);
+        } else if arg == "--risk" || arg.starts_with("--risk=") {
+            if !command.allows_advice_flags() {
+                return Err(Error::usage(format!(
+                    "--risk is only valid for `advice`, not `{}`",
+                    command.name()
+                )));
+            }
+            let value = match arg.strip_prefix("--risk=") {
+                Some(inline) => {
+                    index += 1;
+                    inline.to_string()
+                }
+                None => {
+                    let value = args
+                        .get(index + 1)
+                        .ok_or_else(|| Error::usage("--risk requires a risk band"))?;
+                    index += 2;
+                    value.clone()
+                }
+            };
+            options.risk = Some(advice::parse_risk(&value)?);
+        } else if arg == "--lang" || arg.starts_with("--lang=") {
+            if !command.allows_advice_flags() {
+                return Err(Error::usage(format!(
+                    "--lang is only valid for `advice`, not `{}`",
+                    command.name()
+                )));
+            }
+            let value = match arg.strip_prefix("--lang=") {
+                Some(inline) => {
+                    index += 1;
+                    inline.to_string()
+                }
+                None => {
+                    let value = args
+                        .get(index + 1)
+                        .ok_or_else(|| Error::usage("--lang requires en, tc or both"))?;
+                    index += 2;
+                    value.clone()
+                }
+            };
+            options.lang = Some(Lang::parse(&value)?);
         } else if arg == "--hours" || arg.starts_with("--hours=") {
             let Some(max_hours) = command.max_hours() else {
                 return Err(Error::usage(format!(
@@ -627,6 +689,46 @@ fn command_weather(args: &[String]) -> Result<()> {
     }
 }
 
+fn command_advice(args: &[String]) -> Result<()> {
+    let options = parse_options(args, Command::Advice)?;
+    if options.help {
+        println!("{USAGE}");
+        return Ok(());
+    }
+    apply_cache(&options);
+    let lang = options.lang.unwrap_or(Lang::En);
+    let report = advice::fetch(lang, options.risk)?;
+    if options.json {
+        print_json(&report)
+    } else {
+        print_advice(&report);
+        Ok(())
+    }
+}
+
+fn command_brief(args: &[String]) -> Result<()> {
+    let options = parse_options(args, Command::Brief)?;
+    if options.help {
+        println!("{USAGE}");
+        return Ok(());
+    }
+    let (Some(lat), Some(lng)) = (options.lat, options.lng) else {
+        return Err(Error::usage("`brief` requires --lat and --lng together"));
+    };
+    apply_cache(&options);
+    let report = brief::build(lat, lng)?;
+    if options.json {
+        print_json(&report)?;
+    } else {
+        print_brief(&report);
+    }
+    if report.partial {
+        eprintln!("hkpollution: warning: partial report; see the *_error fields in --json output");
+    }
+    threshold_exit(options.fail_above, brief::worst_aqhi(&report));
+    Ok(())
+}
+
 fn command_doctor(args: &[String]) -> Result<()> {
     let options = parse_options(args, Command::Doctor)?;
     if options.help {
@@ -643,6 +745,99 @@ fn command_doctor(args: &[String]) -> Result<()> {
         exit(1);
     }
     Ok(())
+}
+
+fn print_advice(report: &advice::AdviceReport) {
+    for (index, band) in report.bands.iter().enumerate() {
+        if index > 0 {
+            println!();
+        }
+        println!("{} (AQHI {})", band.risk, band.aqhi_range);
+        if let Some(row) = &band.advice {
+            print_advice_row(row);
+        }
+        if let Some(row) = &band.advice_zh {
+            println!("  [zh]");
+            print_advice_row(row);
+        }
+    }
+    println!();
+    println!(
+        "source: {} health advice (fetched {})",
+        report.source, report.fetched_at
+    );
+}
+
+fn print_advice_row(row: &advice::AdviceRow) {
+    println!("  heart and respiratory  {}", row.heart_and_respiratory);
+    println!("  children and elderly   {}", row.children_and_elderly);
+    println!("  outdoor workers        {}", row.outdoor_workers);
+    println!("  general public         {}", row.general_public);
+}
+
+fn print_brief(report: &brief::BriefReport) {
+    let place = report
+        .location
+        .place
+        .as_deref()
+        .unwrap_or("(place name unavailable)");
+    println!(
+        "place:    {place} ({:.4}, {:.4})",
+        report.location.lat, report.location.lng
+    );
+    match (&report.street, &report.street_error) {
+        (Some(street), _) => println!(
+            "street:   AQHI {} · added risk {}% · {}",
+            format_i64(street.aqhi),
+            format_f64(street.added_health_risk),
+            pretty_time(&street.time)
+        ),
+        (None, Some(error)) => println!("street:   unavailable ({error})"),
+        (None, None) => {}
+    }
+    match (&report.station, &report.station_error) {
+        (Some(station), _) => println!(
+            "station:  {} ({:.1} km away) AQHI {} · {} · {}",
+            station.name,
+            station.distance_km,
+            format_i64(station.aqhi),
+            station.risk.as_deref().unwrap_or("-"),
+            station
+                .time
+                .as_deref()
+                .map_or_else(|| "-".to_string(), pretty_time)
+        ),
+        (None, Some(error)) => println!("station:  unavailable ({error})"),
+        (None, None) => {}
+    }
+    if let Some(weather) = &report.weather {
+        let warnings = if weather.warnings.is_empty() {
+            "no warnings".to_string()
+        } else {
+            weather.warnings.join("; ")
+        };
+        println!(
+            "weather:  {} C · {} % humidity · {warnings}",
+            format_f64(weather.temperature),
+            format_i64(weather.humidity)
+        );
+    }
+    if let Some(advice) = &report.advice {
+        println!();
+        println!("advice for {} (AQHI {}):", advice.risk, advice.aqhi_range);
+        println!("  general public         {}", advice.row.general_public);
+        println!(
+            "  heart and respiratory  {}",
+            advice.row.heart_and_respiratory
+        );
+        println!(
+            "  children and elderly   {}",
+            advice.row.children_and_elderly
+        );
+        println!("  outdoor workers        {}", advice.row.outdoor_workers);
+    }
+    println!();
+    println!("source: {} (fetched {})", report.source, report.fetched_at);
 }
 
 fn print_json<T: serde::Serialize>(value: &T) -> Result<()> {

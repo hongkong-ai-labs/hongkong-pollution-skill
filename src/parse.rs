@@ -8,6 +8,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::Value;
 
+use crate::advice::AdviceRow;
 use crate::error::{Error, Result};
 use crate::model::{
     AQHI_STATIONS, AqhiReading, ForecastEntry, ForecastPeriod, HistoryReading, HkoReading,
@@ -460,7 +461,12 @@ fn hko_warnings(root: &Value) -> Vec<String> {
     warnings
 }
 
-fn strip_tags(input: &str) -> String {
+/// Remove HTML tags and collapse runs of whitespace.
+///
+/// HKO warnings and the app API health advice both arrive as small HTML
+/// fragments (`<p>`, `<b>`, `<br>`); the text is what we want.
+#[must_use]
+pub fn strip_tags(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
     let mut inside_tag = false;
     for character in input.chars() {
@@ -804,4 +810,84 @@ fn array_f64(values: &[Value], index: usize) -> Option<f64> {
 
 fn round_one_decimal(value: f64) -> f64 {
     (value * 10.0).round() / 10.0
+}
+
+/// Parse the app API `/health_advices` payload into `(band_index, row)` pairs.
+///
+/// The upstream rows are Traditional Chinese with `<p>` markup; tags are
+/// stripped and whitespace collapsed. Entries whose category is outside 0-4 are
+/// skipped, and a document with no usable row is a parse error.
+///
+/// # Errors
+///
+/// Returns [`Error::Parse`] when the body is not a JSON array or carries no
+/// advice row.
+pub fn parse_health_advices_json(input: &str) -> Result<Vec<(usize, AdviceRow)>> {
+    let root: Value = serde_json::from_str(strip_bom(input))?;
+    let array = root
+        .as_array()
+        .ok_or_else(|| Error::parse("health advice JSON: expected a top-level array"))?;
+    let mut rows = Vec::new();
+    for item in array {
+        let Some(category) = value_i64(item, "health_risk_category") else {
+            continue;
+        };
+        let Ok(index) = usize::try_from(category) else {
+            continue;
+        };
+        if index > 4 {
+            continue;
+        }
+        let row = AdviceRow {
+            heart_and_respiratory: advice_field(item, "people_with_existing_heart"),
+            children_and_elderly: advice_field(item, "children_and_the_elderly"),
+            outdoor_workers: advice_field(item, "outdoor_workers"),
+            general_public: advice_field(item, "general_public"),
+        };
+        if row.general_public.is_empty() && row.heart_and_respiratory.is_empty() {
+            continue;
+        }
+        rows.push((index, row));
+    }
+    if rows.is_empty() {
+        return Err(Error::parse("health advice JSON: no advice rows found"));
+    }
+    Ok(rows)
+}
+
+fn advice_field(value: &Value, key: &str) -> String {
+    value
+        .get(key)
+        .and_then(Value::as_str)
+        .map(strip_tags)
+        .unwrap_or_default()
+}
+
+/// Parse the PRAISE-HK reverse-geocoding payload and return the first name.
+///
+/// # Errors
+///
+/// Returns [`Error::Parse`] when the body is not an object, reports
+/// `success: false`, or carries no non-empty name.
+pub fn parse_reverse_geocoding_json(input: &str) -> Result<String> {
+    let root: Value = serde_json::from_str(strip_bom(input))?;
+    if !root.is_object() {
+        return Err(Error::parse(
+            "reverse geocoding JSON: expected a top-level object",
+        ));
+    }
+    if root.get("success").and_then(Value::as_bool) == Some(false) {
+        return Err(Error::parse(
+            "reverse geocoding JSON: upstream reported failure",
+        ));
+    }
+    let name = root
+        .get("result")
+        .and_then(Value::as_array)
+        .and_then(|results| results.first())
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .ok_or_else(|| Error::parse("reverse geocoding JSON: no place name returned"))?;
+    Ok(name.to_string())
 }

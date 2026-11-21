@@ -18,6 +18,12 @@ pub const POLLUTANT_INDEX_URL: &str = "https://praise-web.ust.hk:8443/api/pollut
 /// Current weather at a coordinate.
 pub const WEATHER_URL: &str = "https://praise-web.ust.hk:8443/api/weather";
 
+/// Place name for a coordinate.
+pub const REVERSE_GEOCODING_URL: &str = "https://praise-web.ust.hk:8443/location/reverse_geocoding";
+
+/// Freshness of a cached reverse-geocoding body, in seconds.
+const GEOCODING_CACHE_TTL_SECS: u64 = 3_600;
+
 /// Freshness of a cached `pollutant_index` body, in seconds.
 const CACHE_TTL_SECS: u64 = 300;
 
@@ -59,6 +65,19 @@ pub fn fetch(lat: f64, lng: f64, hours: u32) -> Result<StreetReport> {
     let body = http::get_cached(&url, CACHE_TTL_SECS)?;
     let series = parse::parse_praise_json(&body)?;
     build(series, lat, lng, hours)
+}
+
+/// Place name for a Hong Kong coordinate, from PRAISE-HK reverse geocoding.
+///
+/// # Errors
+///
+/// Returns [`Error::Usage`] when the coordinate is outside Hong Kong, and the
+/// usual HTTP/parse errors otherwise.
+pub fn reverse_geocode(lat: f64, lng: f64) -> Result<String> {
+    validate_location(lat, lng)?;
+    let url = format!("{REVERSE_GEOCODING_URL}?mode=all&lang=en&lat={lat}&lng={lng}");
+    let body = http::get_cached(&url, GEOCODING_CACHE_TTL_SECS)?;
+    parse::parse_reverse_geocoding_json(&body)
 }
 
 /// Full `pollutant_index` URL for a coordinate, over the 48-hour window.
