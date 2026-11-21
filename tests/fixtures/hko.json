@@ -1,0 +1,32 @@
+{
+  "updateTime": "2026-11-21T18:02:00+08:00",
+  "temperature": {
+    "data": [
+      {"place": "Hong Kong Observatory", "value": 24.6, "unit": "C"},
+      {"place": "King's Park", "value": 23.9, "unit": "C"},
+      {"place": "Wong Chuk Hang", "value": 25.1, "unit": "C"}
+    ],
+    "recordTime": "2026-11-21T18:00:00+08:00"
+  },
+  "humidity": {
+    "data": [
+      {"place": "Hong Kong Observatory", "value": 68, "unit": "percent"},
+      {"place": "King's Park", "value": "71", "unit": "percent"}
+    ],
+    "recordTime": "2026-11-21T18:00:00+08:00"
+  },
+  "rainfall": {
+    "data": [
+      {"place": "Central & Western District", "max": 0, "unit": "mm"}
+    ],
+    "recordTime": "2026-11-21T17:45:00+08:00"
+  },
+  "warningMessage": [
+    "<b>Very Hot Weather Warning</b> is in force.",
+    "Thunderstorm Warning issued at 4:20 p.m."
+  ],
+  "uvindex": {
+    "data": [{"place": "King's Park", "value": 0, "desc": "low"}],
+    "recordDesc": "During the past hour"
+  }
+}

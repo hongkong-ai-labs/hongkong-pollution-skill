@@ -1,0 +1,64 @@
+﻿<?xml version="1.0" encoding="UTF-8"?>
+<AQHI24HrPollutantConcentration>
+  <lastBuildDate>Sat, 21 Nov 2026 17:30:00 +0800</lastBuildDate>
+  <PollutantConcentration>
+    <StationName>Central/Western</StationName>
+    <DateTime>Fri, 20 Nov 2026 18:00:00 +0800</DateTime>
+    <NO2>47.8</NO2>
+    <O3>45.6</O3>
+    <SO2>1.0</SO2>
+    <CO>-</CO>
+    <PM10>14.7</PM10>
+    <PM2.5>10.8</PM2.5>
+  </PollutantConcentration>
+  <PollutantConcentration>
+    <StationName>Central/Western</StationName>
+    <DateTime>Fri, 20 Nov 2026 19:00:00 +0800</DateTime>
+    <NO2>40.0</NO2>
+    <O3>.8</O3>
+    <SO2>1.2</SO2>
+    <CO>-</CO>
+    <PM10>15.0</PM10>
+    <PM2.5>9.0</PM2.5>
+  </PollutantConcentration>
+  <PollutantConcentration>
+    <StationName>Central/Western</StationName>
+    <DateTime>Fri, 20 Nov 2026 20:00:00 +0800</DateTime>
+    <NO2>35.8</NO2>
+    <O3>0.4</O3>
+    <SO2>-</SO2>
+    <CO>-</CO>
+    <PM10>16.2</PM10>
+    <PM2.5>8.4</PM2.5>
+  </PollutantConcentration>
+  <PollutantConcentration>
+    <StationName>Mong Kok</StationName>
+    <DateTime>Fri, 20 Nov 2026 18:00:00 +0800</DateTime>
+    <NO2>92.1</NO2>
+    <O3>33.0</O3>
+    <SO2>2.4</SO2>
+    <CO>812.0</CO>
+    <PM10>33.6</PM10>
+    <PM2.5>31.2</PM2.5>
+  </PollutantConcentration>
+  <PollutantConcentration>
+    <StationName>Mong Kok</StationName>
+    <DateTime>Fri, 20 Nov 2026 19:00:00 +0800</DateTime>
+    <NO2>88.0</NO2>
+    <O3>30.1</O3>
+    <SO2>2.1</SO2>
+    <CO>790.0</CO>
+    <PM10>31.8</PM10>
+    <PM2.5>29.5</PM2.5>
+  </PollutantConcentration>
+  <PollutantConcentration>
+    <StationName>Mong Kok</StationName>
+    <DateTime>Fri, 20 Nov 2026 20:00:00 +0800</DateTime>
+    <NO2>84.4</NO2>
+    <O3>27.5</O3>
+    <SO2>1.9</SO2>
+    <CO>766.0</CO>
+    <PM10>30.4</PM10>
+    <PM2.5>28.1</PM2.5>
+  </PollutantConcentration>
+</AQHI24HrPollutantConcentration>
