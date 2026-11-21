@@ -74,17 +74,11 @@ version:
 
 # Create the annotated release tag without pushing it.
 tag VERSION:
-    tag="v{{ VERSION }}"
-    tag="${tag#vv}"
-    git tag -a "$tag" -m "Release $tag"
-    @echo "created $tag"
+    tag="v{{ VERSION }}"; tag="${tag#vv}"; git tag -a "$tag" -m "Release $tag"; echo "created $tag"
 
 # Tag and push, which triggers the release workflow.
 release VERSION:
-    tag="v{{ VERSION }}"
-    tag="${tag#vv}"
-    just tag "$tag"
-    git push origin "$tag"
+    tag="v{{ VERSION }}"; tag="${tag#vv}"; just tag "$tag"; git push origin "$tag"
 
 # Remove build artefacts.
 clean:

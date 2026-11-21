@@ -6,25 +6,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-### Added
-
-- Prebuilt `hkpollution` binaries for macOS (Intel and Apple silicon) and
-  Linux (x86_64 and aarch64, static musl), published on every `v*` tag with a
-  `SHA256SUMS` file beside them.
-- `scripts/install.sh`: POSIX `sh` installer that downloads the release
-  tarball matching the host, verifies its SHA256 checksum, installs the binary
-  atomically into `$HKPOLLUTION_BIN_DIR` (default `~/.local/bin`), and falls
-  back to `cargo build --release --locked` from the checked-out source.
-- `scripts/ensure-binary.sh`: prints the absolute path of a working binary,
-  resolving `$HKPOLLUTION_BIN`, then `PATH`, then `install.sh`, then a local
-  cargo build.
-- `SKILL.md` at the repository root, so the repo doubles as an agent skill
-  installable with `npx skills add hongkong-ai-labs/hongkong-pollution-skill`.
-- `justfile` with `check`, `build-release`, `skill-check`, `version`, `tag`
-  and `release` recipes, a `just`-driven release tag and push, and a
-  `skill package` CI job that validates the skill manifest and shell syntax.
-- Thin-LTO, single-codegen-unit release profile for smaller binaries.
-
 ## [0.1.0] - 2026-11-21
 
 ### Added
@@ -45,6 +26,24 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   timestamps in Hong Kong time, concentrations in µg/m³.
 - Exit codes `0` (success), `1` (network, upstream or I/O failure) and `2`
   (usage error), with all diagnostics on stderr.
+- `SKILL.md` at the repository root, so the repo doubles as an agent skill
+  installable with `npx skills add hongkong-ai-labs/hongkong-pollution-skill`.
+- Prebuilt `hkpollution` binaries for macOS (Intel and Apple silicon) and
+  Linux (x86_64 and aarch64, static musl), published on every `v*` tag with a
+  `SHA256SUMS` file beside them.
+- `scripts/install.sh`: POSIX `sh` installer that downloads the release
+  tarball matching the host, verifies its SHA256 checksum, installs the binary
+  atomically into `$HKPOLLUTION_BIN_DIR` (default `~/.local/bin`), upgrades an
+  out-of-date binary in place, and falls back to
+  `cargo build --release --locked` from the checked-out source.
+- `scripts/ensure-binary.sh`: prints the absolute path of a working binary,
+  resolving `$HKPOLLUTION_BIN`, then `PATH`, then `install.sh`, then a local
+  cargo build.
+- `justfile` with `check`, `build-release`, `skill-check`, `version`, `tag`
+  and `release` recipes, so a release is `just release 0.2.0`, plus a
+  `skill package` CI job that validates the skill manifest and shell syntax.
+- Thin-LTO, single-codegen-unit, stripped release profile for smaller
+  binaries.
 
 [Unreleased]: https://github.com/hongkong-ai-labs/hongkong-pollution-skill/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/hongkong-ai-labs/hongkong-pollution-skill/releases/tag/v0.1.0

@@ -128,13 +128,6 @@ mkdir -p "$BIN_DIR"
 BIN_DIR=$(cd "$BIN_DIR" && pwd)
 mkdir -p "$WORK_DIR"
 
-if [ -x "$BIN_DIR/$BINARY" ] && [ "$FORCE" != "1" ]; then
-  printf '%s\n' "$BIN_DIR/$BINARY"
-  exit 0
-fi
-
-TARGET=$(detect_target) || exit 1
-
 if [ -n "$VERSION" ]; then
   case "$VERSION" in
     v*) TAG="$VERSION" ;;
@@ -143,5 +136,18 @@ if [ -n "$VERSION" ]; then
 else
   TAG=$(latest_tag) || die "could not resolve the latest release tag for $REPO; set HKPOLLUTION_VERSION"
 fi
+
+# Keep an installed binary only when it is already the requested version, so a
+# re-run of this script upgrades instead of silently keeping a stale build.
+if [ -x "$BIN_DIR/$BINARY" ] && [ "$FORCE" != "1" ]; then
+  INSTALLED=$("$BIN_DIR/$BINARY" --version 2>/dev/null | awk '{print $NF}') || INSTALLED=""
+  if [ "v$INSTALLED" = "$TAG" ]; then
+    printf '%s\n' "$BIN_DIR/$BINARY"
+    exit 0
+  fi
+  log "replacing $BIN_DIR/$BINARY (${INSTALLED:-unknown version}) with $TAG"
+fi
+
+TARGET=$(detect_target) || exit 1
 
 install_from_release || install_from_source

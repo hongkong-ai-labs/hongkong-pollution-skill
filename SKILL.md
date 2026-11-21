@@ -1,6 +1,6 @@
 ---
 name: hongkong-pollution-skill
-description: Current Hong Kong AQHI and air quality data, per-station pollution readings, a network pollution summary and HKO weather, via a CLI and an MCP server.
+description: Use when asked about Hong Kong air quality, AQHI, pollution levels, smog or HK weather — queries EPD and HKO open data via the hkpollution CLI or MCP server.
 license: MIT
 ---
 
