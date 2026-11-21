@@ -39,7 +39,10 @@ jobs:
         run: cargo clippy --all-targets -- -D warnings
 
       - name: Test
-        run: cargo test --all
+        run: cargo test --all --locked
+
+      - name: Doc
+        run: cargo doc --no-deps --locked
 
       - name: Build release
         run: cargo build --release

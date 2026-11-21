@@ -50,6 +50,8 @@ curl -fsSL https://raw.githubusercontent.com/hongkong-ai-labs/hongkong-pollution
 
 ```sh
 cargo install hkpollution --locked
+# or directly from GitHub:
+cargo install --git https://github.com/hongkong-ai-labs/hongkong-pollution-skill --locked
 ```
 
 **Homebrew** (once the tap is published):
@@ -666,6 +668,12 @@ recorded in [`NOTES.md`](NOTES.md).
 ```sh
 just release 0.4.0
 ```
+
+`rust-toolchain.toml` pins the stable toolchain with `rustfmt` and
+`clippy`, so `rustup` sets contributors up automatically. `just doc`
+builds the API documentation. See `CONTRIBUTING.md` for the full check
+list and the signed-commit requirement.
+
 
 That creates and pushes the annotated tag `v0.4.0`;
 [`.github/workflows/release.yml`](.github/workflows/release.yml) then checks the
