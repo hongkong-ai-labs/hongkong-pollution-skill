@@ -16,9 +16,15 @@ Official Hong Kong air quality and weather data in one binary, `hkpollution`.
   in µg/m³.
 - A network summary: worst and mean AQHI, risk-level counts, worst PM2.5 and
   NO2 stations, and optionally HKO temperature, humidity and warnings.
+- Tomorrow's AQHI range per period, split into general and roadside stations.
+- Hourly AQHI and NO2/O3/SO2/CO/PM10/PM2.5 history per station, newest first.
+- Street-level AQHI, added health risk (%AR) and pollutants at a Hong Kong
+  latitude/longitude, current hour plus forecast.
 - HKO current temperature and humidity readings plus active weather warnings.
 
-All four are available as CLI commands and as four MCP tools.
+All seven are available as CLI commands and as MCP tools. The last three come
+from app APIs that the upstream mobile apps use; reports label them
+`"source": "EPD app API"` and `"source": "PRAISE-HK"`.
 
 ## Before first use
 
@@ -43,13 +49,20 @@ It checks, in order: `$HKPOLLUTION_BIN`, `hkpollution` on `PATH`,
 | --- | --- |
 | `hkpollution aqhi [--station NAME] [--json]` | Current AQHI per station |
 | `hkpollution pollutants [--station NAME] [--hours 1-24] [--json]` | Hourly NO2/O3/SO2/CO/PM10/PM2.5 per station, with averages |
+| `hkpollution forecast [--json]` | Tomorrow's AQHI range, general and roadside |
+| `hkpollution history [--station NAME] [--hours 1-23] [--json]` | Hourly AQHI and pollutants per station, newest first |
+| `hkpollution street --lat L --lng L [--hours 1-48] [--json]` | PRAISE-HK street-level AQHI, %AR and pollutants |
 | `hkpollution summary [--with-weather] [--json]` | Network rollup, optional HKO weather |
 | `hkpollution weather [--json]` | HKO temperature, humidity and warnings |
-| `hkpollution mcp` | The four datasets as MCP tools over stdio |
+| `hkpollution mcp` | Every dataset above as MCP tools over stdio |
 
 `--station` is a case-insensitive substring match; an ambiguous name returns
 every match. `--hours` keeps the newest N hourly readings per station
-(default 1, maximum 24).
+(default 1, maximum 24 for `pollutants` and 23 for `history`); `street` shows
+24 of a possible 48 by default.
+
+`street` needs `--lat` and `--lng` together, inside Hong Kong (latitude
+22.1-22.6, longitude 113.8-114.5), and exits 2 otherwise.
 
 One station:
 
@@ -97,7 +110,7 @@ safe to pipe to `jq`.
 ## MCP server
 
 `hkpollution mcp` speaks JSON-RPC 2.0 over stdio (one JSON object per line,
-protocol revision `2024-11-05`) and exposes four tools:
+protocol revision `2024-11-05`) and exposes seven tools:
 
 | Tool | Arguments |
 | --- | --- |
@@ -105,6 +118,9 @@ protocol revision `2024-11-05`) and exposes four tools:
 | `pollutant_concentrations` | `{ "station"?: string, "hours"?: 1-24 }` |
 | `pollution_summary` | `{ "include_weather"?: boolean }` |
 | `hong_kong_weather` | `{}` |
+| `aqhi_forecast` | `{}` |
+| `station_history` | `{ "station"?: string, "hours"?: 1-23 }` |
+| `street_level_aqhi` | `{ "lat": number, "lng": number, "hours"?: 1-48 }` |
 
 Client configuration, with `command` set to the path printed by
 `scripts/ensure-binary.sh`:
@@ -137,9 +153,10 @@ Errors always go to stderr; stdout stays clean for `--json`.
 ## Attribution
 
 Data © Government of the Hong Kong Special Administrative Region: the
-Environmental Protection Department (AQHI, pollutant concentrations) and the
-Hong Kong Observatory (weather readings). Keep this attribution when you
-redistribute the data.
+Environmental Protection Department (AQHI, pollutant concentrations, forecast
+and station history) and the Hong Kong Observatory (weather readings).
+Street-level data is the PRAISE-HK model © HKUST Institute for the
+Environment. Keep this attribution when you redistribute the data.
 
 ## Source and offline builds
 

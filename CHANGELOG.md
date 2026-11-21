@@ -6,6 +6,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `hkpollution forecast`: tomorrow's AQHI range for general and roadside
+  stations, from the undocumented EPD app API.
+- `hkpollution history`: hourly AQHI and pollutant history per station,
+  newest first, with `--station` and `--hours` (1-23), from the EPD app API.
+- `hkpollution street`: PRAISE-HK street-level AQHI, added health risk and
+  pollutant forecast for a Hong Kong latitude/longitude, with `--hours`
+  (1-48, default 24).
+- MCP tools `aqhi_forecast`, `station_history` and `street_level_aqhi`,
+  exposing the same payloads as the new commands.
+- EPD app API and PRAISE-HK sources, labelled `"source": "EPD app API"` and
+  `"source": "PRAISE-HK"`; the documented feeds remain the primary source
+  for `aqhi`, `pollutants`, `summary` and `weather`.
+
 ## [0.1.0] - 2026-11-21
 
 ### Added

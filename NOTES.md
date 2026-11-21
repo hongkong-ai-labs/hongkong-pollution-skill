@@ -74,6 +74,39 @@ The places where `SPEC.md` left a choice open, and the reading taken.
 - **A missing `arguments` object is treated as `{}`**, so `pollution_summary`
   and `hong_kong_weather` can be called with only a name.
 
+## App APIs (forecast, history, street)
+
+- **The app APIs are additive, not primary.** `app.epd-asmg.gov.hk/api/v2`
+  and `praise-web.ust.hk:8443` are undocumented endpoints behind the mobile
+  apps, so they can change without notice. `aqhi`, `pollutants`, `summary`
+  and `weather` keep reading the documented open-data feeds; the new commands
+  only add to them, and an app API failure is an ordinary `Error` (exit 1) or
+  MCP `isError: true`, never a panic.
+- **Source labels separate the transports.** `"source": "EPD"` still means the
+  documented EPD feeds, the app API reports `"source": "EPD app API"`, and
+  street-level reports `"source": "PRAISE-HK"`. That keeps the provenance of
+  an undocumented endpoint visible without changing existing payloads.
+- **The `--hours` maxima follow each upstream.** `pollutants` keeps 1-24
+  because the XML feed publishes 24 hours; `history` caps at 23 because
+  `/monitors/{id}` returns exactly 23 history entries; `street` allows the
+  plan's 1-48 over the 48-hour forecast window. Defaults are 1 for `history`
+  and 24 for `street`, so the street report is useful without a flag.
+- **The id→name table in `model.rs` is static.** The app API names stations in
+  Traditional Chinese only, and station identity is part of the JSON
+  contract, so the 18 rows were verified against the live `/monitors` list on
+  2026-11-21 and hard-coded. `--station` still resolves against the canonical
+  English list first, then the resolved names map to monitor ids, so an
+  unknown or ambiguous name behaves exactly as it does for `aqhi`.
+- **`history --json` always returns the full series.** `hours` only trims the
+  table; the payload carries all 23 upstream entries newest first, with
+  `latest` repeating the first one.
+- **`street` always requests the 48-hour window** regardless of `--hours`,
+  then truncates, so `current` is stable and a short table does not change
+  the upstream query.
+- **The forecast join is positional plus by English label.** The two lists are
+  paired by position and `forecast_period_en`; a period present on only one
+  side is still emitted with `null` for the other.
+
 ## Misc
 
 - **Summary logic lives in `aqhi.rs`** (plus the pure `model::rollup`) rather
