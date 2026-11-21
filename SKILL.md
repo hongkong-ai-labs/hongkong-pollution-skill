@@ -1,6 +1,6 @@
 ---
 name: hongkong-pollution-skill
-description: Use when asked about Hong Kong air quality, AQHI, pollution levels, smog or HK weather — queries EPD and HKO open data via the hkpollution CLI or MCP server.
+description: Use when asked about Hong Kong air quality, AQHI, pollution levels, smog, beach water quality or HK weather — queries EPD and HKO open data via the hkpollution CLI or MCP server.
 license: MIT
 ---
 
@@ -21,10 +21,13 @@ Official Hong Kong air quality and weather data in one binary, `hkpollution`.
 - Street-level AQHI, added health risk (%AR) and pollutants at a Hong Kong
   latitude/longitude, current hour plus forecast.
 - HKO current temperature and humidity readings plus active weather warnings.
+- Latest EPD beach water-quality grading for every gazetted beach: district,
+  grade (Good, Fair, Poor, Very Poor), open/closed status, and the reason when
+  a beach is not graded (winter, not open, closed, planned).
 
-All ten are available as CLI commands and as MCP tools. The last three come
-from app APIs that the upstream mobile apps use; reports label them
-`"source": "EPD app API"` and `"source": "PRAISE-HK"`.
+All of these are available as CLI commands and as MCP tools. The forecast and
+history commands come from app APIs that the upstream mobile apps use; reports
+label them `"source": "EPD app API"` and `"source": "PRAISE-HK"`.
 
 ## Before first use
 
@@ -54,6 +57,7 @@ It checks, in order: `$HKPOLLUTION_BIN`, `hkpollution` on `PATH`,
 | `hkpollution street --lat L --lng L [--hours 1-48] [--json]` | PRAISE-HK street-level AQHI, %AR and pollutants |
 | `hkpollution summary [--with-weather] [--json]` | Network rollup, optional HKO weather |
 | `hkpollution weather [--forecast] [--json]` | HKO temperature, humidity and warnings, plus the nine-day forecast |
+| `hkpollution beach [--name TEXT] [--district TEXT] [--grade BAND] [--json]` | EPD beach water-quality grading |
 | `hkpollution advice [--risk BAND] [--lang en\|tc\|both] [--json]` | Official EPD precautionary actions per AQHI band |
 | `hkpollution brief --lat L --lng L [--json]` | Place name, street AQHI, nearest station, weather and advice in one call |
 | `hkpollution map --bbox lat0,lng0,lat1,lng1 [--json]` | PRAISE-HK raster tile link for a bounding box |
@@ -67,6 +71,12 @@ every match. `--hours` keeps the newest N hourly readings per station
 
 `street` needs `--lat` and `--lng` together, inside Hong Kong (latitude
 22.1-22.6, longitude 113.8-114.5), and exits 2 otherwise.
+
+`beach --grade` accepts `good`, `fair`, `poor`, `very-poor`, `graded`,
+`ungraded` or `open`. `--name` matches beach or district text; `--district`
+matches the district only. In winter EPD stops grading many beaches, so an
+empty `--grade good` result does not mean the water is bad — check
+`grade_name` and `status`.
 
 One station:
 
@@ -114,7 +124,7 @@ safe to pipe to `jq`.
 ## MCP server
 
 `hkpollution mcp` speaks JSON-RPC 2.0 over stdio (one JSON object per line,
-protocol revision `2024-11-05`) and exposes seven tools:
+protocol revision `2024-11-05`) and exposes these tools:
 
 | Tool | Arguments |
 | --- | --- |
@@ -122,6 +132,7 @@ protocol revision `2024-11-05`) and exposes seven tools:
 | `pollutant_concentrations` | `{ "station"?: string, "hours"?: 1-24 }` |
 | `pollution_summary` | `{ "include_weather"?: boolean }` |
 | `hong_kong_weather` | `{}` |
+| `beach_water_quality` | `{ "name"?: string, "district"?: string, "grade"?: string }` |
 | `air_quality_briefing` | `{ "lat": number, "lng": number, "no_cache"?: boolean }` |
 | `health_advice` | `{ "risk"?: string, "lang"?: "en"\|"tc"\|"both" }` |
 | `source_health` | `{}` |
@@ -165,6 +176,8 @@ Errors always go to stderr; stdout stays clean for `--json`.
 - "Which station is worst right now?" → `summary --json`, read `worst` and `trend`.
 - "Where should I walk?" → `street --lat <x> --lng <y> --hours 3` for nearby hours.
 - "Will it be better tomorrow?" → `forecast` (AQHI bands) or `weather --forecast`.
+- "Is it safe to swim at X beach?" → `beach --name X`; quote the EPD grade and
+  status, and do not call an ungraded winter beach dirty or clean.
 - "What does 'High' mean for me?" → `advice --risk high`; the answer is the official
   EPD wording, not a paraphrase.
 - Monitoring: `aqhi --fail-above 7` exits 3, so a cron job can act on it directly.
@@ -177,8 +190,9 @@ after an earlier call in the same minute, and `--max-age 0` to force a refetch.
 ## Attribution
 
 Data © Government of the Hong Kong Special Administrative Region: the
-Environmental Protection Department (AQHI, pollutant concentrations, forecast
-and station history) and the Hong Kong Observatory (weather readings).
+Environmental Protection Department (AQHI, pollutant concentrations, forecast,
+station history and beach water-quality grading) and the Hong Kong Observatory
+(weather readings).
 Street-level data is the PRAISE-HK model © HKUST Institute for the
 Environment. Keep this attribution when you redistribute the data.
 

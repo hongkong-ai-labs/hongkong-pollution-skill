@@ -128,6 +128,7 @@ fn mcp_answers_initialize_tools_list_ping_and_unknown_methods() {
             "air_quality_aqhi",
             "air_quality_briefing",
             "aqhi_forecast",
+            "beach_water_quality",
             "health_advice",
             "hong_kong_weather",
             "pollutant_concentrations",

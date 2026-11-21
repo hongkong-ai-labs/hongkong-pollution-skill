@@ -279,6 +279,30 @@ fn tools_list() -> Value {
                 }
             },
             {
+                "name": "beach_water_quality",
+                "description": "Latest EPD beach water-quality grading for Hong Kong gazetted \
+                                beaches, with district, grade and open/closed status.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "name": {
+                            "type": "string",
+                            "description": "Beach name or district substring, e.g. \"Silver Mine\"."
+                        },
+                        "district": {
+                            "type": "string",
+                            "description": "District substring, e.g. \"Islands\"."
+                        },
+                        "grade": {
+                            "type": "string",
+                            "enum": ["good", "fair", "poor", "very-poor", "graded", "ungraded", "open"],
+                            "description": "Keep only this grade band."
+                        }
+                    },
+                    "additionalProperties": false
+                }
+            },
+            {
                 "name": "source_health",
                 "description": "Probe every upstream source once and report latency, failures \
                                 and schema mismatches, plus cache statistics.",
@@ -331,6 +355,7 @@ fn call_tool(id: Option<Value>, params: Option<&Value>) -> Value {
         "pollutant_concentrations" => tool_pollutants(&arguments),
         "pollution_summary" => tool_summary(&arguments),
         "hong_kong_weather" => tool_weather(),
+        "beach_water_quality" => tool_beach(&arguments),
         "aqhi_forecast" => tool_forecast(),
         "station_history" => tool_history(&arguments),
         "street_level_aqhi" => tool_street(&arguments),
@@ -444,6 +469,24 @@ fn tool_source_health() -> Result<Value> {
 
 fn tool_weather() -> Result<Value> {
     let report = weather::fetch()?;
+    Ok(serde_json::to_value(&report)?)
+}
+
+fn tool_beach(arguments: &Value) -> Result<Value> {
+    let mut report = crate::beach::fetch()?;
+    if let Some(query) = arguments.get("name").and_then(Value::as_str) {
+        crate::beach::retain_query(&mut report, query);
+    }
+    if let Some(query) = arguments.get("district").and_then(Value::as_str) {
+        let needle = query.trim().to_lowercase();
+        report
+            .beaches
+            .retain(|item| item.district.to_lowercase().contains(&needle));
+        report.count = report.beaches.len();
+    }
+    if let Some(band) = arguments.get("grade").and_then(Value::as_str) {
+        crate::beach::retain_grade(&mut report, band)?;
+    }
     Ok(serde_json::to_value(&report)?)
 }
 

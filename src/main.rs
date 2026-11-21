@@ -8,7 +8,7 @@ use hongkong_pollution_skill::model::{
     nearest_station, resolve_station, rollup,
 };
 use hongkong_pollution_skill::{
-    Error, Result, VERSION, advice, advice::Lang, aqhi, brief, doctor, epd_app, http, mcp,
+    Error, Result, VERSION, advice, advice::Lang, aqhi, beach, brief, doctor, epd_app, http, mcp,
     pollutants, praise, weather,
 };
 
@@ -32,6 +32,7 @@ USAGE:
     hkpollution summary    [--station <name> | --near <lat>,<lng>] [--fail-above <N>]
                            [--json] [--with-weather]
     hkpollution weather    [--forecast] [--json]
+    hkpollution beach      [--name <text>] [--district <text>] [--grade <band>] [--json]
     hkpollution map        --bbox <lat0,lng0,lat1,lng1> [--pid <id>] [--at <iso>] [--json]
     hkpollution about      [--json]
     hkpollution doctor     [--json]
@@ -108,6 +109,7 @@ fn run(args: &[String]) -> Result<()> {
         "street" => command_street(&args[1..]),
         "summary" => command_summary(&args[1..]),
         "weather" => command_weather(&args[1..]),
+        "beach" => command_beach(&args[1..]),
         "advice" => command_advice(&args[1..]),
         "brief" => command_brief(&args[1..]),
         "map" => command_map(&args[1..]),
@@ -849,6 +851,92 @@ fn command_weather(args: &[String]) -> Result<()> {
         }
         Ok(())
     }
+}
+
+fn command_beach(args: &[String]) -> Result<()> {
+    let mut json = false;
+    let mut name: Option<String> = None;
+    let mut district: Option<String> = None;
+    let mut grade: Option<String> = None;
+    let mut index = 0;
+    while index < args.len() {
+        let arg = args[index].as_str();
+        match arg {
+            "--json" => {
+                json = true;
+                index += 1;
+            }
+            "--help" | "-h" => {
+                println!("{USAGE}");
+                return Ok(());
+            }
+            "--no-cache" => {
+                http::configure_cache(true, None);
+                index += 1;
+            }
+            "--refresh" => {
+                http::configure_cache(false, Some(0));
+                index += 1;
+            }
+            "--max-age" | "--name" | "--district" | "--grade" => {
+                let value = args
+                    .get(index + 1)
+                    .ok_or_else(|| Error::usage(format!("{arg} requires a value")))?
+                    .clone();
+                match arg {
+                    "--max-age" => {
+                        let seconds: u64 = value.trim().parse().map_err(|_| {
+                            Error::usage(format!(
+                                "--max-age must be a non-negative number of seconds, got {value:?}"
+                            ))
+                        })?;
+                        http::configure_cache(false, Some(seconds));
+                    }
+                    "--name" => name = Some(value),
+                    "--district" => district = Some(value),
+                    _ => grade = Some(value),
+                }
+                index += 2;
+            }
+            other => {
+                return Err(Error::usage(format!("unknown argument for `beach`: {other}")));
+            }
+        }
+    }
+    let mut report = beach::fetch()?;
+    if let Some(query) = &name {
+        beach::retain_query(&mut report, query);
+    }
+    if let Some(query) = &district {
+        let needle = query.to_lowercase();
+        report
+            .beaches
+            .retain(|item| item.district.to_lowercase().contains(&needle));
+        report.count = report.beaches.len();
+    }
+    if let Some(band) = &grade {
+        beach::retain_grade(&mut report, band)?;
+    }
+    if json {
+        print_json(&report)?;
+    } else if report.beaches.is_empty() {
+        println!("No beaches matched.");
+    } else {
+        let rows: Vec<Vec<String>> = report
+            .beaches
+            .iter()
+            .map(|item| {
+                vec![
+                    item.district.clone(),
+                    item.name.clone(),
+                    item.grade_name.clone(),
+                    item.status.clone(),
+                ]
+            })
+            .collect();
+        print_table(&["DISTRICT", "BEACH", "GRADE", "STATUS"], &rows);
+    }
+    Ok(())
 }
 
 fn command_advice(args: &[String]) -> Result<()> {
