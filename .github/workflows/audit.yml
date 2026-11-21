@@ -1,0 +1,38 @@
+name: Security audit
+
+# Dependabot opens PRs for known-vulnerable versions; this job fails the build
+# when the lockfile already resolves to one, including advisories Dependabot has
+# not published a PR for yet.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - Cargo.toml
+      - Cargo.lock
+      - .github/workflows/audit.yml
+  pull_request:
+    paths:
+      - Cargo.toml
+      - Cargo.lock
+  schedule:
+    - cron: "0 1 * * 1" # Mondays 01:00 UTC (09:00 HKT), before Dependabot PRs
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  checks: write
+  issues: write
+
+jobs:
+  audit:
+    name: cargo audit
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Audit Rust dependencies
+        uses: rustsec/audit-check@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
