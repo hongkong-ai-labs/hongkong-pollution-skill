@@ -56,7 +56,7 @@ Whichever route you take:
 
 ```console
 $ hkpollution --version
-hkpollution 0.1.0
+hkpollution 0.2.0
 ```
 
 ## What you get
@@ -234,7 +234,7 @@ $ printf '%s\n' \
     '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
     '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' \
   | hkpollution mcp
-{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2024-11-05","capabilities":{"tools":{}},"serverInfo":{"name":"hongkong-pollution-skill","version":"0.1.0"}}}
+{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2024-11-05","capabilities":{"tools":{}},"serverInfo":{"name":"hongkong-pollution-skill","version":"0.2.0"}}}
 {"jsonrpc":"2.0","id":2,"result":{"tools":[ ... ]}}
 ```
 
@@ -351,7 +351,7 @@ A `justfile` holds the everyday commands (`brew install just` if you need it):
 | `just audit` | `cargo audit` against the lockfile |
 | `just skill-check` | Validate `SKILL.md` and shell syntax the way CI does |
 | `just version` | Print the release tag for the current `Cargo.toml` version |
-| `just release 0.2.0` | Tag and push; the release workflow does the rest |
+| `just release 0.3.0` | Tag and push; the release workflow does the rest |
 
 Layout:
 
@@ -378,20 +378,20 @@ recorded in [`NOTES.md`](NOTES.md).
 ## Releasing
 
 ```sh
-just release 0.2.0
+just release 0.3.0
 ```
 
-That creates and pushes the annotated tag `v0.2.0`;
+That creates and pushes the annotated tag `v0.3.0`;
 [`.github/workflows/release.yml`](.github/workflows/release.yml) then checks the
 tag against `Cargo.toml` and `CHANGELOG.md`, builds four targets, smoke-tests
 the native ones, and publishes a GitHub release:
 
 | Asset | Target |
 | --- | --- |
-| `hkpollution-v0.2.0-aarch64-apple-darwin.tar.gz` | macOS, Apple silicon |
-| `hkpollution-v0.2.0-x86_64-apple-darwin.tar.gz` | macOS, Intel |
-| `hkpollution-v0.2.0-x86_64-unknown-linux-musl.tar.gz` | Linux, x86_64 (static) |
-| `hkpollution-v0.2.0-aarch64-unknown-linux-musl.tar.gz` | Linux, aarch64 (static) |
+| `hkpollution-v0.3.0-aarch64-apple-darwin.tar.gz` | macOS, Apple silicon |
+| `hkpollution-v0.3.0-x86_64-apple-darwin.tar.gz` | macOS, Intel |
+| `hkpollution-v0.3.0-x86_64-unknown-linux-musl.tar.gz` | Linux, x86_64 (static) |
+| `hkpollution-v0.3.0-aarch64-unknown-linux-musl.tar.gz` | Linux, aarch64 (static) |
 | `SHA256SUMS` | Checksums for every tarball |
 
 `scripts/install.sh` reads the latest release, so re-running the one-liner

@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-21
+
 ### Added
 
 - `hkpollution forecast`: tomorrow's AQHI range for general and roadside
@@ -60,5 +62,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Thin-LTO, single-codegen-unit, stripped release profile for smaller
   binaries.
 
-[Unreleased]: https://github.com/hongkong-ai-labs/hongkong-pollution-skill/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/hongkong-ai-labs/hongkong-pollution-skill/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/hongkong-ai-labs/hongkong-pollution-skill/releases/tag/v0.2.0
 [0.1.0]: https://github.com/hongkong-ai-labs/hongkong-pollution-skill/releases/tag/v0.1.0
