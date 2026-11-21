@@ -439,6 +439,51 @@ pub struct HistoryReport {
     pub fetched_at: String,
 }
 
+/// The location a PRAISE-HK street-level query was made for.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+pub struct StreetLocation {
+    /// Latitude in degrees.
+    pub lat: f64,
+    /// Longitude in degrees.
+    pub lng: f64,
+}
+
+/// One hourly PRAISE-HK street-level reading.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct StreetReading {
+    /// Reading time, ISO-8601 with `+08:00`.
+    pub time: String,
+    /// Air Quality Health Index (`AQHIBN`).
+    pub aqhi: Option<i64>,
+    /// Added health risk in percent (`AQHIER`).
+    pub added_health_risk: Option<f64>,
+    /// Nitrogen dioxide in µg/m³.
+    pub no2: Option<f64>,
+    /// Ozone in µg/m³.
+    pub o3: Option<f64>,
+    /// Respirable suspended particulates (PM10) in µg/m³.
+    pub pm10: Option<f64>,
+    /// Fine suspended particulates (PM2.5) in µg/m³.
+    pub pm25: Option<f64>,
+    /// Sulphur dioxide in µg/m³.
+    pub so2: Option<f64>,
+}
+
+/// The `street --json` payload.
+#[derive(Debug, Clone, Serialize)]
+pub struct StreetReport {
+    /// Queried location.
+    pub location: StreetLocation,
+    /// Reading for the current hour, the first entry of `series`.
+    pub current: Option<StreetReading>,
+    /// Hourly series, starting at the current hour, at most `hours` entries.
+    pub series: Vec<StreetReading>,
+    /// Data provider, always `PRAISE-HK`.
+    pub source: String,
+    /// When this process fetched the data, in Hong Kong time.
+    pub fetched_at: String,
+}
+
 /// One station in the `pollutants --json` payload.
 #[derive(Debug, Clone, Serialize)]
 pub struct StationPollutants {

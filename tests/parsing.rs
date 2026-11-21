@@ -4,8 +4,10 @@ use hongkong_pollution_skill::model::{ForecastEntry, ForecastRange};
 use hongkong_pollution_skill::parse::{
     blocks, inner_text, join_forecast, normalize_datetime, parse_aqhi_json, parse_aqhi_rss,
     parse_forecast_entries, parse_forecast_json, parse_measurement, parse_monitor_detail_json,
-    parse_monitors_json, parse_pollutants_xml, parse_weather_json, rfc2822_to_iso, strip_bom,
+    parse_monitors_json, parse_pollutants_xml, parse_praise_json, parse_weather_json,
+    rfc2822_to_iso, strip_bom,
 };
+use hongkong_pollution_skill::praise::{build, validate_location};
 
 const AQHI_JSON: &str = include_str!("fixtures/aqhi.json");
 const AQHI_RSS: &str = include_str!("fixtures/aqhi_rss.xml");
@@ -14,6 +16,7 @@ const HKO_JSON: &str = include_str!("fixtures/hko.json");
 const EPD_FORECAST: &str = include_str!("fixtures/epd_forecast.json");
 const EPD_MONITORS: &str = include_str!("fixtures/epd_monitors.json");
 const EPD_MONITOR_66: &str = include_str!("fixtures/epd_monitor_66.json");
+const PRAISE: &str = include_str!("fixtures/praise_pollutant_index.json");
 
 #[test]
 fn aqhi_json_yields_every_station() {
@@ -271,6 +274,71 @@ fn monitors_json_maps_ids_to_canonical_names() {
     );
     assert!(parse_monitors_json("{}").is_err());
     assert!(parse_monitors_json("[]").is_err());
+}
+
+#[test]
+fn praise_json_maps_series_and_rounds_to_one_decimal() {
+    let series = parse_praise_json(PRAISE).unwrap();
+    assert_eq!(series.len(), 49);
+
+    let first = &series[0];
+    assert_eq!(first.time, "2026-11-21T19:00+08:00");
+    assert_eq!(first.aqhi, Some(4));
+    assert_eq!(first.added_health_risk, Some(6.3));
+    assert_eq!(first.no2, Some(12.8));
+    assert_eq!(first.o3, Some(103.9));
+    assert_eq!(first.pm10, Some(16.1));
+    assert_eq!(first.pm25, Some(10.1));
+    assert_eq!(first.so2, Some(4.7));
+    assert_eq!(series.last().unwrap().time, "2026-11-23T19:00+08:00");
+}
+
+#[test]
+fn praise_json_keeps_missing_values_null() {
+    let payload = "{\"AQHIBN\":[3,null],\"AQHIER\":[5.0,1.2345],\"NO2\":[null,2.0],\
+                   \"O3\":[1.0],\"PM10\":[1.0,null],\"PM2.5\":[null,null],\"SO2\":[3.0,4.0],\
+                   \"isots\":[\"2026-11-21T19:00+08:00\",\"2026-11-21T20:00+08:00\"],\"status\":0}";
+    let series = parse_praise_json(payload).unwrap();
+    assert_eq!(series.len(), 2);
+    assert_eq!(series[0].aqhi, Some(3));
+    assert_eq!(series[1].aqhi, None);
+    assert_eq!(series[1].added_health_risk, Some(1.2));
+    assert_eq!(series[1].no2, Some(2.0));
+    assert_eq!(series[1].o3, None, "a short series is null past its end");
+    assert_eq!(series[0].pm25, None);
+    assert!(parse_praise_json("[]").is_err());
+    assert!(parse_praise_json("{\"status\":1,\"isots\":[]}").is_err());
+}
+
+#[test]
+fn praise_hours_window_trims_the_series() {
+    let series = parse_praise_json(PRAISE).unwrap();
+    let report = build(series.clone(), 22.33751, 114.263, 6).unwrap();
+    assert_eq!(report.series.len(), 6);
+    assert_eq!(report.current.as_ref(), report.series.first());
+    assert_eq!(report.source, "PRAISE-HK");
+    assert_eq!(report.location.lat, 22.33751);
+
+    let full = build(series, 22.33751, 114.263, 48).unwrap();
+    assert_eq!(
+        full.series.len(),
+        48,
+        "49 upstream hours trim to the 48-hour maximum"
+    );
+
+    assert!(build(Vec::new(), 22.33751, 114.263, 0).is_err());
+    assert!(build(Vec::new(), 22.33751, 114.263, 49).is_err());
+}
+
+#[test]
+fn praise_coordinate_bounds_are_usage_errors() {
+    assert!(validate_location(22.1, 113.8).is_ok());
+    assert!(validate_location(22.6, 114.5).is_ok());
+    for (lat, lng) in [(22.0, 114.2), (22.7, 114.2), (22.3, 113.7), (22.3, 114.6)] {
+        let error = validate_location(lat, lng).unwrap_err();
+        assert!(error.is_usage(), "{lat},{lng} must be a usage error");
+    }
+    assert!(validate_location(f64::NAN, 114.2).unwrap_err().is_usage());
 }
 
 #[test]

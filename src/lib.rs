@@ -11,6 +11,7 @@
 //! - [`parse`] turns raw payloads into [`model`] values without touching the network,
 //! - [`aqhi`], [`pollutants`] and [`weather`] combine both for one data source each,
 //! - [`epd_app`] adds the undocumented EPD app API forecast and station history,
+//! - [`praise`] adds the PRAISE-HK street-level AQHI and pollutant forecast,
 //! - [`mcp`] speaks JSON-RPC 2.0 over stdio for AI agents.
 //!
 //! ```
@@ -29,6 +30,7 @@ pub mod mcp;
 pub mod model;
 pub mod parse;
 pub mod pollutants;
+pub mod praise;
 pub mod weather;
 
 pub use error::{Error, Result};
@@ -43,11 +45,27 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// algorithm instead of a date-time crate.
 #[must_use]
 pub fn now_hkt_iso8601() -> String {
-    let seconds = std::time::SystemTime::now()
+    format_hkt(unix_seconds())
+}
+
+/// Current time plus `hours`, as an ISO-8601 string in Hong Kong time.
+///
+/// Used for the upper bound of the PRAISE-HK 48-hour forecast window; the same
+/// fixed `+08:00` arithmetic as [`now_hkt_iso8601`] applies.
+#[must_use]
+pub fn now_hkt_iso8601_plus_hours(hours: i64) -> String {
+    format_hkt(unix_seconds() + hours * 3_600)
+}
+
+fn unix_seconds() -> i64 {
+    std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|elapsed| elapsed.as_secs() as i64)
-        .unwrap_or(0);
-    let local = seconds + 8 * 3_600;
+        .unwrap_or(0)
+}
+
+fn format_hkt(unix_seconds: i64) -> String {
+    let local = unix_seconds + 8 * 3_600;
     let days = local.div_euclid(86_400);
     let rem = local.rem_euclid(86_400);
     let (year, month, day) = civil_from_days(days);

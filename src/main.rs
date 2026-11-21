@@ -4,9 +4,11 @@ use std::process::exit;
 
 use hongkong_pollution_skill::model::{
     AqhiReport, Averages, ForecastRange, ForecastReport, HistoryReading, HistoryReport,
-    PollutantsReport, SummaryReport, WeatherReport, mean, resolve_station,
+    PollutantsReport, StreetReport, SummaryReport, WeatherReport, mean, resolve_station,
 };
-use hongkong_pollution_skill::{Error, Result, VERSION, aqhi, epd_app, mcp, pollutants, weather};
+use hongkong_pollution_skill::{
+    Error, Result, VERSION, aqhi, epd_app, mcp, pollutants, praise, weather,
+};
 
 const USAGE: &str = "\
 hkpollution - Hong Kong air pollution data (EPD AQHI + HKO weather)
@@ -16,6 +18,7 @@ USAGE:
     hkpollution pollutants [--station <name>] [--hours <1-24>] [--json]
     hkpollution forecast   [--json]
     hkpollution history    [--station <name>] [--hours <1-23>] [--json]
+    hkpollution street     --lat <22.x> --lng <114.x> [--hours <1-48>] [--json]
     hkpollution summary    [--json] [--with-weather]
     hkpollution weather    [--json]
     hkpollution mcp
@@ -23,8 +26,10 @@ USAGE:
 
 OPTIONS:
     --station <name>   case-insensitive station substring; ambiguous names return all matches
-    --hours <N>        newest hourly readings kept per station: 1-24 for `pollutants`,
-                       1-23 for `history` (default 1)
+    --lat <deg>        street-level latitude in Hong Kong (22.1-22.6), with --lng
+    --lng <deg>        street-level longitude in Hong Kong (113.8-114.5), with --lat
+    --hours <N>        hourly rows kept: 1-24 for `pollutants`, 1-23 for `history`,
+                       1-48 for `street` (default 1, 24 for `street`)
     --json             print one JSON object to stdout and nothing else
     --with-weather     add HKO temperature, humidity and warnings to the summary
 
@@ -72,6 +77,7 @@ fn run(args: &[String]) -> Result<()> {
         "pollutants" => command_pollutants(&args[1..]),
         "forecast" => command_forecast(&args[1..]),
         "history" => command_history(&args[1..]),
+        "street" => command_street(&args[1..]),
         "summary" => command_summary(&args[1..]),
         "weather" => command_weather(&args[1..]),
         other => Err(Error::usage(format!("unknown command: {other}"))),
@@ -84,6 +90,7 @@ enum Command {
     Pollutants,
     Forecast,
     History,
+    Street,
     Summary,
     Weather,
 }
@@ -95,6 +102,7 @@ impl Command {
             Self::Pollutants => "pollutants",
             Self::Forecast => "forecast",
             Self::History => "history",
+            Self::Street => "street",
             Self::Summary => "summary",
             Self::Weather => "weather",
         }
@@ -108,8 +116,13 @@ impl Command {
         match self {
             Self::Pollutants => Some(pollutants::MAX_HOURS),
             Self::History => Some(epd_app::MAX_HOURS),
+            Self::Street => Some(praise::MAX_HOURS),
             _ => None,
         }
+    }
+
+    fn allows_location(self) -> bool {
+        matches!(self, Self::Street)
     }
 
     fn allows_weather(self) -> bool {
@@ -124,6 +137,8 @@ struct Options {
     help: bool,
     station: Option<String>,
     hours: Option<u32>,
+    lat: Option<f64>,
+    lng: Option<f64>,
 }
 
 fn parse_options(args: &[String], command: Command) -> Result<Options> {
@@ -173,7 +188,7 @@ fn parse_options(args: &[String], command: Command) -> Result<Options> {
         } else if arg == "--hours" || arg.starts_with("--hours=") {
             let Some(max_hours) = command.max_hours() else {
                 return Err(Error::usage(format!(
-                    "--hours is only valid for `pollutants` and `history`, not `{}`",
+                    "--hours is only valid for `pollutants`, `history` and `street`, not `{}`",
                     command.name()
                 )));
             };
@@ -203,6 +218,56 @@ fn parse_options(args: &[String], command: Command) -> Result<Options> {
                 )));
             }
             options.hours = Some(hours);
+        } else if arg == "--lat" || arg.starts_with("--lat=") {
+            if !command.allows_location() {
+                return Err(Error::usage(format!(
+                    "--lat is only valid for `street`, not `{}`",
+                    command.name()
+                )));
+            }
+            let value = match arg.strip_prefix("--lat=") {
+                Some(inline) => {
+                    index += 1;
+                    inline.to_string()
+                }
+                None => {
+                    let value = args
+                        .get(index + 1)
+                        .ok_or_else(|| Error::usage("--lat requires a latitude"))?;
+                    index += 2;
+                    value.clone()
+                }
+            };
+            let lat: f64 = value
+                .trim()
+                .parse()
+                .map_err(|_| Error::usage(format!("--lat must be a number, got {value:?}")))?;
+            options.lat = Some(lat);
+        } else if arg == "--lng" || arg.starts_with("--lng=") {
+            if !command.allows_location() {
+                return Err(Error::usage(format!(
+                    "--lng is only valid for `street`, not `{}`",
+                    command.name()
+                )));
+            }
+            let value = match arg.strip_prefix("--lng=") {
+                Some(inline) => {
+                    index += 1;
+                    inline.to_string()
+                }
+                None => {
+                    let value = args
+                        .get(index + 1)
+                        .ok_or_else(|| Error::usage("--lng requires a longitude"))?;
+                    index += 2;
+                    value.clone()
+                }
+            };
+            let lng: f64 = value
+                .trim()
+                .parse()
+                .map_err(|_| Error::usage(format!("--lng must be a number, got {value:?}")))?;
+            options.lng = Some(lng);
         } else {
             return Err(Error::usage(format!(
                 "unknown argument for `{}`: {arg}",
@@ -277,6 +342,24 @@ fn command_history(args: &[String]) -> Result<()> {
         print_json(&report)
     } else {
         print_history(&report);
+        Ok(())
+    }
+}
+
+fn command_street(args: &[String]) -> Result<()> {
+    let options = parse_options(args, Command::Street)?;
+    if options.help {
+        println!("{USAGE}");
+        return Ok(());
+    }
+    let (Some(lat), Some(lng)) = (options.lat, options.lng) else {
+        return Err(Error::usage("`street` requires --lat and --lng together"));
+    };
+    let report = praise::fetch(lat, lng, options.hours.unwrap_or(praise::DEFAULT_HOURS))?;
+    if options.json {
+        print_json(&report)
+    } else {
+        print_street(&report);
         Ok(())
     }
 }
@@ -473,6 +556,34 @@ fn history_row(station: &str, reading: &HistoryReading) -> Vec<String> {
         format_f64(reading.pm10),
         format_f64(reading.pm25),
     ]
+}
+
+fn print_street(report: &StreetReport) {
+    let rows: Vec<Vec<String>> = report
+        .series
+        .iter()
+        .map(|reading| {
+            vec![
+                pretty_time(&reading.time),
+                format_i64(reading.aqhi),
+                format_f64(reading.added_health_risk),
+                format_f64(reading.no2),
+                format_f64(reading.o3),
+                format_f64(reading.pm10),
+                format_f64(reading.pm25),
+                format_f64(reading.so2),
+            ]
+        })
+        .collect();
+    print_table(
+        &["Time", "AQHI", "%AR", "NO2", "O3", "PM10", "PM2.5", "SO2"],
+        &rows,
+    );
+    println!();
+    println!(
+        "source: PRAISE-HK street-level model © HKUST Institute for the Environment (fetched {})",
+        report.fetched_at
+    );
 }
 
 fn print_summary(report: &SummaryReport) {

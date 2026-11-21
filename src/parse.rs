@@ -12,7 +12,7 @@ use crate::error::{Error, Result};
 use crate::model::{
     AQHI_STATIONS, AqhiReading, ForecastEntry, ForecastPeriod, HistoryReading, HkoReading,
     MonitorDetail, MonitorStation, ParsedForecast, ParsedPollutants, PollutantReading,
-    PollutantRecord, WeatherReport, app_station_name,
+    PollutantRecord, StreetReading, WeatherReport, app_station_name,
 };
 
 const MONTHS: [&str; 12] = [
@@ -730,4 +730,78 @@ fn history_values(root: &Value, key: &str) -> BTreeMap<String, Option<f64>> {
         }
     }
     values
+}
+
+/// Parse the PRAISE-HK `pollutant_index` payload into hourly readings.
+///
+/// Each series is aligned by position with `isots`; a null or absent value
+/// stays `None`. Pollutant values and the added health risk are rounded to one
+/// decimal place. The upstream order is kept: the first entry is the current
+/// hour and later entries extend into the forecast.
+///
+/// # Errors
+///
+/// Returns [`Error::Parse`] when the document is not an object, reports a
+/// non-zero `status`, has no `isots` array or yields no reading.
+pub fn parse_praise_json(input: &str) -> Result<Vec<StreetReading>> {
+    let root: Value = serde_json::from_str(strip_bom(input))?;
+    if !root.is_object() {
+        return Err(Error::parse("PRAISE-HK JSON: expected a top-level object"));
+    }
+    if let Some(status) = root.get("status").and_then(Value::as_i64) {
+        if status != 0 {
+            return Err(Error::parse(format!(
+                "PRAISE-HK JSON: upstream status {status}"
+            )));
+        }
+    }
+    let Some(times) = root.get("isots").and_then(Value::as_array) else {
+        return Err(Error::parse("PRAISE-HK JSON: missing isots array"));
+    };
+    let aqhi = json_array(&root, "AQHIBN");
+    let added_health_risk = json_array(&root, "AQHIER");
+    let no2 = json_array(&root, "NO2");
+    let o3 = json_array(&root, "O3");
+    let pm10 = json_array(&root, "PM10");
+    let pm25 = json_array(&root, "PM2.5");
+    let so2 = json_array(&root, "SO2");
+    let mut readings = Vec::with_capacity(times.len());
+    for (index, time) in times.iter().enumerate() {
+        let Some(time) = time.as_str().map(str::trim).filter(|time| !time.is_empty()) else {
+            continue;
+        };
+        readings.push(StreetReading {
+            time: normalize_datetime(time),
+            aqhi: array_f64(&aqhi, index).map(|value| value.round() as i64),
+            added_health_risk: array_f64(&added_health_risk, index).map(round_one_decimal),
+            no2: array_f64(&no2, index).map(round_one_decimal),
+            o3: array_f64(&o3, index).map(round_one_decimal),
+            pm10: array_f64(&pm10, index).map(round_one_decimal),
+            pm25: array_f64(&pm25, index).map(round_one_decimal),
+            so2: array_f64(&so2, index).map(round_one_decimal),
+        });
+    }
+    if readings.is_empty() {
+        return Err(Error::parse("PRAISE-HK JSON: no readings found"));
+    }
+    Ok(readings)
+}
+
+fn json_array(root: &Value, key: &str) -> Vec<Value> {
+    root.get(key)
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+}
+
+fn array_f64(values: &[Value], index: usize) -> Option<f64> {
+    match values.get(index)? {
+        Value::Number(number) => number.as_f64(),
+        Value::String(text) => parse_measurement(text),
+        _ => None,
+    }
+}
+
+fn round_one_decimal(value: f64) -> f64 {
+    (value * 10.0).round() / 10.0
 }

@@ -38,3 +38,23 @@ pub fn get_text(url: &str) -> Result<String> {
         .into_string()
         .map_err(|error| Error::http(url, error))
 }
+
+/// Percent-encode a query-string value.
+///
+/// Everything outside the RFC 3986 unreserved set (`A-Z a-z 0-9 - _ . ~`) is
+/// escaped as uppercase `%XX`, which keeps `+`, `:`, `,` and non-ASCII safe in
+/// a URL. `ureq` offers no public helper, and this keeps the crate free of an
+/// extra dependency.
+#[must_use]
+pub fn encode_query_value(value: &str) -> String {
+    let mut encoded = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                encoded.push(char::from(byte));
+            }
+            _ => encoded.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    encoded
+}
