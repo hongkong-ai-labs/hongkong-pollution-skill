@@ -1,11 +1,16 @@
 //! Rollup tests: windowing, null skipping, worst/mean selection.
 
+use hongkong_pollution_skill::epd_app::build_history;
 use hongkong_pollution_skill::model::{mean, rollup};
-use hongkong_pollution_skill::parse::{parse_aqhi_json, parse_pollutants_xml};
+use hongkong_pollution_skill::parse::{
+    parse_aqhi_json, parse_monitor_detail_json, parse_monitors_json, parse_pollutants_xml,
+};
 use hongkong_pollution_skill::pollutants::{build, worst_pollutant};
 
 const AQHI_JSON: &str = include_str!("fixtures/aqhi.json");
 const POLLUTANTS_XML: &str = include_str!("fixtures/24pc.xml");
+const EPD_MONITORS: &str = include_str!("fixtures/epd_monitors.json");
+const EPD_MONITOR_66: &str = include_str!("fixtures/epd_monitor_66.json");
 
 fn central_report(hours: u32) -> hongkong_pollution_skill::model::PollutantsReport {
     let parsed = parse_pollutants_xml(POLLUTANTS_XML).unwrap();
@@ -120,4 +125,55 @@ fn rollup_handles_empty_and_missing_values() {
     assert_eq!(mean(&[]), None);
     assert_eq!(mean(&[1.0, 2.0]), Some(1.5));
     assert_eq!(mean(&[1.0, 2.0, 2.0]), Some(1.7));
+}
+
+#[test]
+fn history_report_keeps_the_full_series_and_validates_hours() {
+    let monitors = parse_monitors_json(EPD_MONITORS).unwrap();
+    let detail = parse_monitor_detail_json(EPD_MONITOR_66).unwrap();
+    let report = build_history(monitors.clone(), vec![detail], 3).unwrap();
+
+    assert_eq!(report.hours, 3);
+    assert_eq!(report.stations.len(), 18);
+    assert_eq!(report.source, "EPD app API");
+
+    let sham_shui_po = report
+        .stations
+        .iter()
+        .find(|station| station.station_id == 66)
+        .unwrap();
+    assert_eq!(sham_shui_po.station, "Sham Shui Po");
+    assert_eq!(sham_shui_po.category, "general");
+    assert_eq!(sham_shui_po.latitude, Some(22.330099));
+    assert_eq!(
+        sham_shui_po.series.len(),
+        23,
+        "JSON always carries the full series, not just the table window"
+    );
+    assert_eq!(
+        sham_shui_po.latest.as_ref().unwrap().time,
+        sham_shui_po.series[0].time
+    );
+
+    let causeway_bay = report
+        .stations
+        .iter()
+        .find(|station| station.station_id == 71)
+        .unwrap();
+    assert_eq!(causeway_bay.category, "roadside");
+
+    let tai_po = report
+        .stations
+        .iter()
+        .find(|station| station.station_id == 69)
+        .unwrap();
+    assert_eq!(
+        tai_po.series.len(),
+        1,
+        "a station without a fetched detail keeps its newest reading"
+    );
+    assert_eq!(tai_po.series[0], *tai_po.latest.as_ref().unwrap());
+
+    assert!(build_history(monitors.clone(), Vec::new(), 0).is_err());
+    assert!(build_history(monitors, Vec::new(), 24).is_err());
 }

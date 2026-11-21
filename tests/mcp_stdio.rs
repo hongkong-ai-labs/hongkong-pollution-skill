@@ -73,6 +73,12 @@ fn mcp_answers_initialize_tools_list_ping_and_unknown_methods() {
         "method": "tools/call",
         "params": { "name": "nope" }
     }));
+    server.send(&json!({
+        "jsonrpc": "2.0",
+        "id": 6,
+        "method": "tools/call",
+        "params": { "name": "station_history", "arguments": { "hours": 24 } }
+    }));
 
     let initialize = server.receive();
     assert_eq!(initialize["jsonrpc"], "2.0");
@@ -102,15 +108,38 @@ fn mcp_answers_initialize_tools_list_ping_and_unknown_methods() {
         names,
         vec![
             "air_quality_aqhi",
+            "aqhi_forecast",
             "hong_kong_weather",
             "pollutant_concentrations",
-            "pollution_summary"
+            "pollution_summary",
+            "station_history"
         ]
     );
     for tool in tools {
         assert!(tool["description"].is_string(), "every tool is described");
         assert_eq!(tool["inputSchema"]["type"], "object");
     }
+
+    let forecast = tools
+        .iter()
+        .find(|tool| tool["name"] == "aqhi_forecast")
+        .unwrap();
+    assert!(
+        forecast["inputSchema"]["properties"]
+            .as_object()
+            .unwrap()
+            .is_empty(),
+        "aqhi_forecast takes no arguments"
+    );
+    let history = tools
+        .iter()
+        .find(|tool| tool["name"] == "station_history")
+        .unwrap();
+    assert_eq!(history["inputSchema"]["properties"]["hours"]["maximum"], 23);
+    assert_eq!(
+        history["inputSchema"]["properties"]["station"]["type"],
+        "string"
+    );
 
     let ping = server.receive();
     assert_eq!(ping["id"], 3);
@@ -125,6 +154,15 @@ fn mcp_answers_initialize_tools_list_ping_and_unknown_methods() {
     let bad_tool = server.receive();
     assert_eq!(bad_tool["id"], 5);
     assert_eq!(bad_tool["error"]["code"], -32602);
+
+    // Out-of-range hours is rejected before any network call, so this stays offline.
+    let bad_hours = server.receive();
+    assert_eq!(bad_hours["id"], 6);
+    assert_eq!(bad_hours["result"]["isError"], true);
+    let message = bad_hours["result"]["content"][0]["text"]
+        .as_str()
+        .expect("error text");
+    assert!(message.contains("23"), "message: {message}");
 
     server.close_stdin();
     let status = server.child.wait().expect("server exits on EOF");

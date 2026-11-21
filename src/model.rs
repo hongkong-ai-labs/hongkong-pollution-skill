@@ -31,6 +31,159 @@ pub const AQHI_STATIONS: [&str; 18] = [
     "Mong Kok",
 ];
 
+/// One monitor in the undocumented EPD AQHI app API station table.
+///
+/// `/monitors` names stations in Traditional Chinese only, so app API payloads
+/// are mapped back to [`AQHI_STATIONS`] through this table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AppStation {
+    /// Numeric monitor id used by `app.epd-asmg.gov.hk`.
+    pub id: i64,
+    /// Traditional Chinese name as published.
+    pub name_tc: &'static str,
+    /// Canonical English name, matching [`AQHI_STATIONS`].
+    pub name_en: &'static str,
+    /// `0` for general stations, `1` for roadside stations.
+    pub category: u8,
+}
+
+/// The app API station table, verified against the live `/monitors` list on
+/// 2026-11-21.
+pub const EPD_APP_STATIONS: [AppStation; 18] = [
+    AppStation {
+        id: 66,
+        name_tc: "深水埗",
+        name_en: "Sham Shui Po",
+        category: 0,
+    },
+    AppStation {
+        id: 69,
+        name_tc: "大埔",
+        name_en: "Tai Po",
+        category: 0,
+    },
+    AppStation {
+        id: 70,
+        name_tc: "元朗",
+        name_en: "Yuen Long",
+        category: 0,
+    },
+    AppStation {
+        id: 71,
+        name_tc: "銅鑼灣",
+        name_en: "Causeway Bay",
+        category: 1,
+    },
+    AppStation {
+        id: 72,
+        name_tc: "葵涌",
+        name_en: "Kwai Chung",
+        category: 0,
+    },
+    AppStation {
+        id: 73,
+        name_tc: "東區",
+        name_en: "Eastern",
+        category: 0,
+    },
+    AppStation {
+        id: 74,
+        name_tc: "觀塘",
+        name_en: "Kwun Tong",
+        category: 0,
+    },
+    AppStation {
+        id: 75,
+        name_tc: "沙田",
+        name_en: "Sha Tin",
+        category: 0,
+    },
+    AppStation {
+        id: 76,
+        name_tc: "塔門",
+        name_en: "Tap Mun",
+        category: 0,
+    },
+    AppStation {
+        id: 77,
+        name_tc: "荃灣",
+        name_en: "Tsuen Wan",
+        category: 0,
+    },
+    AppStation {
+        id: 78,
+        name_tc: "東涌",
+        name_en: "Tung Chung",
+        category: 0,
+    },
+    AppStation {
+        id: 79,
+        name_tc: "中環",
+        name_en: "Central",
+        category: 1,
+    },
+    AppStation {
+        id: 80,
+        name_tc: "中西區",
+        name_en: "Central/Western",
+        category: 0,
+    },
+    AppStation {
+        id: 81,
+        name_tc: "旺角",
+        name_en: "Mong Kok",
+        category: 1,
+    },
+    AppStation {
+        id: 82,
+        name_tc: "屯門",
+        name_en: "Tuen Mun",
+        category: 0,
+    },
+    AppStation {
+        id: 83,
+        name_tc: "將軍澳",
+        name_en: "Tseung Kwan O",
+        category: 0,
+    },
+    AppStation {
+        id: 84,
+        name_tc: "南區",
+        name_en: "Southern",
+        category: 0,
+    },
+    AppStation {
+        id: 85,
+        name_tc: "北區",
+        name_en: "North",
+        category: 0,
+    },
+];
+
+/// Canonical English name for an app API monitor id.
+#[must_use]
+pub fn app_station_name(id: i64) -> Option<&'static str> {
+    EPD_APP_STATIONS
+        .iter()
+        .find(|station| station.id == id)
+        .map(|station| station.name_en)
+}
+
+/// App API monitor id for a canonical station name.
+#[must_use]
+pub fn app_station_id(name: &str) -> Option<i64> {
+    EPD_APP_STATIONS
+        .iter()
+        .find(|station| station.name_en.eq_ignore_ascii_case(name.trim()))
+        .map(|station| station.id)
+}
+
+/// `general` for app API category 0, `roadside` for category 1.
+#[must_use]
+pub fn app_category_label(category: u8) -> &'static str {
+    if category == 1 { "roadside" } else { "general" }
+}
+
 /// One station's current AQHI reading.
 #[derive(Debug, Clone, Serialize)]
 pub struct AqhiReading {
@@ -119,6 +272,171 @@ impl Averages {
             pm25: mean_of(series, |reading| reading.pm25),
         }
     }
+
+    /// Average an app API history series per pollutant, skipping nulls and
+    /// rounding to one decimal place.
+    #[must_use]
+    pub fn from_history(series: &[HistoryReading]) -> Self {
+        fn mean_of(
+            series: &[HistoryReading],
+            pick: fn(&HistoryReading) -> Option<f64>,
+        ) -> Option<f64> {
+            let values: Vec<f64> = series.iter().filter_map(pick).collect();
+            mean(&values)
+        }
+
+        Self {
+            no2: mean_of(series, |reading| reading.no2),
+            o3: mean_of(series, |reading| reading.o3),
+            so2: mean_of(series, |reading| reading.so2),
+            co: mean_of(series, |reading| reading.co),
+            pm10: mean_of(series, |reading| reading.pm10),
+            pm25: mean_of(series, |reading| reading.pm25),
+        }
+    }
+}
+
+/// AQHI range forecast for one period.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct ForecastRange {
+    /// Lowest forecast AQHI in the period.
+    pub min: i64,
+    /// Highest forecast AQHI in the period.
+    pub max: i64,
+}
+
+/// One entry of one forecast list, before the two lists are joined.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ForecastEntry {
+    /// English period label, for example `Tomorrow A.M.`.
+    pub period: String,
+    /// Lowest forecast AQHI.
+    pub min: i64,
+    /// Highest forecast AQHI.
+    pub max: i64,
+}
+
+impl ForecastEntry {
+    /// The range as it appears in the report.
+    #[must_use]
+    pub fn range(&self) -> ForecastRange {
+        ForecastRange {
+            min: self.min,
+            max: self.max,
+        }
+    }
+}
+
+/// Raw output of the forecast JSON parser: the two lists, unjoined.
+#[derive(Debug, Clone, Default)]
+pub struct ParsedForecast {
+    /// General-station forecasts, in payload order.
+    pub general: Vec<ForecastEntry>,
+    /// Roadside-station forecasts, in payload order.
+    pub roadside: Vec<ForecastEntry>,
+}
+
+/// One forecast period joined across general and roadside stations.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ForecastPeriod {
+    /// English period label.
+    pub period: String,
+    /// General-station range, `null` when the period only exists for roadside.
+    pub general: Option<ForecastRange>,
+    /// Roadside range, `null` when the period only exists for general stations.
+    pub roadside: Option<ForecastRange>,
+}
+
+/// The `forecast --json` payload.
+#[derive(Debug, Clone, Serialize)]
+pub struct ForecastReport {
+    /// Forecast periods, in payload order.
+    pub periods: Vec<ForecastPeriod>,
+    /// Data provider, always `EPD app API`.
+    pub source: String,
+    /// When this process fetched the data, in Hong Kong time.
+    pub fetched_at: String,
+}
+
+/// One hourly AQHI and pollutant reading from the app API.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct HistoryReading {
+    /// Reading time, ISO-8601 with `+08:00`.
+    pub time: String,
+    /// Air Quality Health Index.
+    pub aqhi: Option<i64>,
+    /// Nitrogen dioxide in µg/m³.
+    pub no2: Option<f64>,
+    /// Ozone in µg/m³.
+    pub o3: Option<f64>,
+    /// Sulphur dioxide in µg/m³.
+    pub so2: Option<f64>,
+    /// Carbon monoxide in µg/m³.
+    pub co: Option<f64>,
+    /// Respirable suspended particulates (PM10) in µg/m³.
+    pub pm10: Option<f64>,
+    /// Fine suspended particulates (PM2.5) in µg/m³.
+    pub pm25: Option<f64>,
+}
+
+/// One monitor from `/monitors`, before any history is requested.
+#[derive(Debug, Clone)]
+pub struct MonitorStation {
+    /// App API monitor id.
+    pub id: i64,
+    /// Canonical English station name.
+    pub station: String,
+    /// `0` for general, `1` for roadside.
+    pub category: u8,
+    /// Station latitude in degrees.
+    pub latitude: Option<f64>,
+    /// Station longitude in degrees.
+    pub longitude: Option<f64>,
+    /// Newest reading, if the monitor published one.
+    pub latest: Option<HistoryReading>,
+}
+
+/// One monitor from `/monitors/{id}`, including its hourly histories.
+#[derive(Debug, Clone)]
+pub struct MonitorDetail {
+    /// App API monitor id.
+    pub id: i64,
+    /// Newest reading from the monitor's top-level fields.
+    pub latest: Option<HistoryReading>,
+    /// Full hourly series, newest first.
+    pub series: Vec<HistoryReading>,
+}
+
+/// One station in the `history --json` payload.
+#[derive(Debug, Clone, Serialize)]
+pub struct StationHistory {
+    /// Canonical English station name.
+    pub station: String,
+    /// App API monitor id.
+    pub station_id: i64,
+    /// `general` or `roadside`.
+    pub category: String,
+    /// Station latitude in degrees.
+    pub latitude: Option<f64>,
+    /// Station longitude in degrees.
+    pub longitude: Option<f64>,
+    /// Newest reading in the series.
+    pub latest: Option<HistoryReading>,
+    /// Full hourly series, newest first.
+    pub series: Vec<HistoryReading>,
+}
+
+/// The `history --json` payload.
+#[derive(Debug, Clone, Serialize)]
+pub struct HistoryReport {
+    /// Requested table window in hours (1-23).
+    pub hours: u32,
+    /// Selected stations, in monitor-id order.
+    pub stations: Vec<StationHistory>,
+    /// Data provider, always `EPD app API`.
+    pub source: String,
+    /// When this process fetched the data, in Hong Kong time.
+    pub fetched_at: String,
 }
 
 /// One station in the `pollutants --json` payload.

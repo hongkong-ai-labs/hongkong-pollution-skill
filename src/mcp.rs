@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 
 use crate::error::{Error, Result};
 use crate::model::resolve_station;
-use crate::{VERSION, aqhi, pollutants, weather};
+use crate::{VERSION, aqhi, epd_app, pollutants, weather};
 
 /// MCP protocol revision this server implements.
 pub const PROTOCOL_VERSION: &str = "2024-11-05";
@@ -157,6 +157,37 @@ fn tools_list() -> Value {
                     "properties": {},
                     "additionalProperties": false
                 }
+            },
+            {
+                "name": "aqhi_forecast",
+                "description": "EPD app API forecast of the AQHI range for the next general and \
+                                roadside periods (undocumented endpoint).",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": false
+                }
+            },
+            {
+                "name": "station_history",
+                "description": "EPD app API hourly AQHI and pollutant history per station, \
+                                newest first; defaults to every station's latest reading.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "station": {
+                            "type": "string",
+                            "description": "Case-insensitive station name substring."
+                        },
+                        "hours": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 23,
+                            "description": "Newest hourly table window (default 1)."
+                        }
+                    },
+                    "additionalProperties": false
+                }
             }
         ]
     })
@@ -178,6 +209,8 @@ fn call_tool(id: Option<Value>, params: Option<&Value>) -> Value {
         "pollutant_concentrations" => tool_pollutants(&arguments),
         "pollution_summary" => tool_summary(&arguments),
         "hong_kong_weather" => tool_weather(),
+        "aqhi_forecast" => tool_forecast(),
+        "station_history" => tool_history(&arguments),
         other => {
             return error_response(id, INVALID_PARAMS, &format!("unknown tool: {other}"));
         }
@@ -241,6 +274,27 @@ fn tool_summary(arguments: &Value) -> Result<Value> {
 
 fn tool_weather() -> Result<Value> {
     let report = weather::fetch()?;
+    Ok(serde_json::to_value(&report)?)
+}
+
+fn tool_forecast() -> Result<Value> {
+    let report = epd_app::fetch_forecast()?;
+    Ok(serde_json::to_value(&report)?)
+}
+
+fn tool_history(arguments: &Value) -> Result<Value> {
+    let hours = match arguments.get("hours") {
+        None | Some(Value::Null) => 1,
+        Some(value) => value
+            .as_u64()
+            .and_then(|raw| u32::try_from(raw).ok())
+            .ok_or_else(|| Error::usage("hours must be an integer between 1 and 23"))?,
+    };
+    if hours == 0 || hours > epd_app::MAX_HOURS {
+        return Err(Error::usage("hours must be between 1 and 23"));
+    }
+    let station = arguments.get("station").and_then(Value::as_str);
+    let report = epd_app::fetch_history(station, hours)?;
     Ok(serde_json::to_value(&report)?)
 }
 
