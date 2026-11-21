@@ -10,7 +10,9 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::error::Error;
-use crate::{VERSION, aqhi, cache, epd_app, http, now_hkt_iso8601, pollutants, praise, weather};
+use crate::{
+    VERSION, aqhi, beach, cache, epd_app, http, now_hkt_iso8601, pollutants, praise, weather,
+};
 
 /// Representative coordinate used by the PRAISE-HK probes (Tsim Sha Tsui).
 const PROBE_LAT: f64 = 22.3024;
@@ -26,6 +28,8 @@ pub enum Schema {
     Keys(&'static [&'static str]),
     /// A text or XML payload containing every one of these element names.
     Elements(&'static [&'static str]),
+    /// A text payload containing this literal marker.
+    Contains(&'static str),
 }
 
 /// One source to probe.
@@ -95,7 +99,7 @@ impl Report {
     }
 }
 
-/// The nine sources the doctor knows how to check.
+/// Every source the doctor knows how to check.
 #[must_use]
 pub fn default_probes() -> Vec<Probe> {
     vec![
@@ -143,6 +147,16 @@ pub fn default_probes() -> Vec<Probe> {
             source: "PRAISE pollutant_index",
             url: praise::pollutant_index_url(PROBE_LAT, PROBE_LNG),
             schema: Schema::Keys(&["AQHIBN"]),
+        },
+        Probe {
+            source: "EPD beach grading",
+            url: beach::BEACH_URL.to_string(),
+            schema: Schema::Keys(&["features"]),
+        },
+        Probe {
+            source: "EPD beach E. coli",
+            url: beach::ecoli_url(beach::latest_published_year()),
+            schema: Schema::Contains("E. coli"),
         },
     ]
 }
@@ -248,5 +262,7 @@ fn schema_problem(body: &str, schema: Schema) -> Option<(String, String)> {
             .iter()
             .find(|element| !body.contains(&format!("<{element}")))
             .map(|element| (element.to_string(), format!("missing element <{element}>"))),
+        Schema::Contains(marker) => (!body.contains(marker))
+            .then(|| (marker.to_string(), format!("missing marker {marker:?}"))),
     }
 }

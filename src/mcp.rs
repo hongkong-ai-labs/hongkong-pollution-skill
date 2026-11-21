@@ -281,7 +281,10 @@ fn tools_list() -> Value {
             {
                 "name": "beach_water_quality",
                 "description": "Latest EPD beach water-quality grading for Hong Kong gazetted \
-                                beaches, with district, grade and open/closed status.",
+                                beaches, with district, grade, open/closed status, WGS84 \
+                                coordinates and the most recent published E. coli sampling \
+                                history (latest count per 100 mL, recent samples, geometric \
+                                mean).",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -297,6 +300,14 @@ fn tools_list() -> Value {
                             "type": "string",
                             "enum": ["good", "fair", "poor", "very-poor", "graded", "ungraded", "open"],
                             "description": "Keep only this grade band."
+                        },
+                        "lat": {
+                            "type": "number",
+                            "description": "Latitude in Hong Kong; with lng, sort beaches by distance."
+                        },
+                        "lng": {
+                            "type": "number",
+                            "description": "Longitude in Hong Kong; with lat, sort beaches by distance."
                         }
                     },
                     "additionalProperties": false
@@ -486,6 +497,14 @@ fn tool_beach(arguments: &Value) -> Result<Value> {
     }
     if let Some(band) = arguments.get("grade").and_then(Value::as_str) {
         crate::beach::retain_grade(&mut report, band)?;
+    }
+    match (
+        arguments.get("lat").and_then(Value::as_f64),
+        arguments.get("lng").and_then(Value::as_f64),
+    ) {
+        (Some(lat), Some(lng)) => crate::beach::sort_by_distance(&mut report, lat, lng),
+        (None, None) => {}
+        _ => return Err(Error::usage("lat and lng must be given together")),
     }
     Ok(serde_json::to_value(&report)?)
 }

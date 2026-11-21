@@ -32,7 +32,8 @@ USAGE:
     hkpollution summary    [--station <name> | --near <lat>,<lng>] [--fail-above <N>]
                            [--json] [--with-weather]
     hkpollution weather    [--forecast] [--json]
-    hkpollution beach      [--name <text>] [--district <text>] [--grade <band>] [--json]
+    hkpollution beach      [--name <text>] [--district <text>] [--grade <band>]
+                           [--near <lat>,<lng>] [--json]
     hkpollution map        --bbox <lat0,lng0,lat1,lng1> [--pid <id>] [--at <iso>] [--json]
     hkpollution about      [--json]
     hkpollution doctor     [--json]
@@ -41,8 +42,8 @@ USAGE:
 
 OPTIONS:
     --station <name>   case-insensitive station substring; ambiguous names return all matches
-    --near <lat>,<lng> nearest station to a Hong Kong coordinate (22.1-22.6, 113.8-114.5);
-                       cannot be combined with --station
+    --near <lat>,<lng> nearest station (or beach) to a Hong Kong coordinate
+                       (22.1-22.6, 113.8-114.5); cannot be combined with --station
     --lat <deg>        street-level latitude in Hong Kong (22.1-22.6), with --lng
     --lng <deg>        street-level longitude in Hong Kong (113.8-114.5), with --lat
     --hours <N>        hourly rows kept: 1-24 for `pollutants`, 1-23 for `history`,
@@ -858,6 +859,7 @@ fn command_beach(args: &[String]) -> Result<()> {
     let mut name: Option<String> = None;
     let mut district: Option<String> = None;
     let mut grade: Option<String> = None;
+    let mut near: Option<(f64, f64)> = None;
     let mut index = 0;
     while index < args.len() {
         let arg = args[index].as_str();
@@ -878,7 +880,7 @@ fn command_beach(args: &[String]) -> Result<()> {
                 http::configure_cache(false, Some(0));
                 index += 1;
             }
-            "--max-age" | "--name" | "--district" | "--grade" => {
+            "--max-age" | "--name" | "--district" | "--grade" | "--near" => {
                 let value = args
                     .get(index + 1)
                     .ok_or_else(|| Error::usage(format!("{arg} requires a value")))?
@@ -894,12 +896,15 @@ fn command_beach(args: &[String]) -> Result<()> {
                     }
                     "--name" => name = Some(value),
                     "--district" => district = Some(value),
+                    "--near" => near = Some(parse_near(&value)?),
                     _ => grade = Some(value),
                 }
                 index += 2;
             }
             other => {
-                return Err(Error::usage(format!("unknown argument for `beach`: {other}")));
+                return Err(Error::usage(format!(
+                    "unknown argument for `beach`: {other}"
+                )));
             }
         }
     }
@@ -917,24 +922,64 @@ fn command_beach(args: &[String]) -> Result<()> {
     if let Some(band) = &grade {
         beach::retain_grade(&mut report, band)?;
     }
+    if let Some((lat, lng)) = near {
+        beach::sort_by_distance(&mut report, lat, lng);
+    }
     if json {
         print_json(&report)?;
     } else if report.beaches.is_empty() {
         println!("No beaches matched.");
     } else {
+        let mut headers = vec!["DISTRICT", "BEACH", "GRADE", "STATUS"];
+        if near.is_some() {
+            headers.push("DIST");
+        }
+        headers.extend(["E. COLI", "SAMPLED"]);
         let rows: Vec<Vec<String>> = report
             .beaches
             .iter()
             .map(|item| {
-                vec![
+                let mut row = vec![
                     item.district.clone(),
                     item.name.clone(),
                     item.grade_name.clone(),
                     item.status.clone(),
-                ]
+                ];
+                if near.is_some() {
+                    row.push(match item.distance_km {
+                        Some(distance) => format!("{distance:.1} km"),
+                        None => "-".to_string(),
+                    });
+                }
+                row.push(match &item.ecoli {
+                    Some(ecoli) => ecoli.latest_per_100ml.to_string(),
+                    None => "-".to_string(),
+                });
+                row.push(match &item.ecoli {
+                    Some(ecoli) => ecoli.latest_sampled_on.clone(),
+                    None => "-".to_string(),
+                });
+                row
             })
             .collect();
-        print_table(&["DISTRICT", "BEACH", "GRADE", "STATUS"], &rows);
+        print_table(&headers, &rows);
+        println!(
+            "\n{} of {} beaches graded, {} open for swimming",
+            report.graded, report.count, report.open
+        );
+        if let Some(source) = &report.ecoli_source {
+            let year = source
+                .rsplit('/')
+                .next()
+                .and_then(|file| file.strip_prefix("beach-historical-data-"))
+                .and_then(|rest| rest.get(0..4))
+                .unwrap_or("latest");
+            println!("E. coli: EPD beach monitoring, {year} published sampling file (per 100 mL)");
+        }
+        if let Some(error) = &report.ecoli_error {
+            println!("E. coli unavailable: {error}");
+        }
+        println!("\nsource: {}", report.source);
     }
     Ok(())
 }
