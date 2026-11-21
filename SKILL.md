@@ -22,8 +22,11 @@ Official Hong Kong air quality and weather data in one binary, `hkpollution`.
   latitude/longitude, current hour plus forecast.
 - HKO current temperature and humidity readings plus active weather warnings.
 - Latest EPD beach water-quality grading for every gazetted beach: district,
-  grade (Good, Fair, Poor, Very Poor), open/closed status, and the reason when
-  a beach is not graded (winter, not open, closed, planned).
+  grade (Good, Fair, Poor, Very Poor), open/closed status, WGS84 coordinates and
+  the reason when a beach is not graded (winter, not open, closed, planned).
+- Published E. coli monitoring for each beach: latest count per 100 mL, its
+  sampling date, the five most recent samples, and the geometric mean of those
+  five — the same figure EPD grades on.
 
 All of these are available as CLI commands and as MCP tools. The forecast and
 history commands come from app APIs that the upstream mobile apps use; reports
@@ -57,7 +60,7 @@ It checks, in order: `$HKPOLLUTION_BIN`, `hkpollution` on `PATH`,
 | `hkpollution street --lat L --lng L [--hours 1-48] [--json]` | PRAISE-HK street-level AQHI, %AR and pollutants |
 | `hkpollution summary [--with-weather] [--json]` | Network rollup, optional HKO weather |
 | `hkpollution weather [--forecast] [--json]` | HKO temperature, humidity and warnings, plus the nine-day forecast |
-| `hkpollution beach [--name TEXT] [--district TEXT] [--grade BAND] [--json]` | EPD beach water-quality grading |
+| `hkpollution beach [--name TEXT] [--district TEXT] [--grade BAND] [--near LAT,LNG] [--json]` | EPD beach grading plus E. coli history |
 | `hkpollution advice [--risk BAND] [--lang en\|tc\|both] [--json]` | Official EPD precautionary actions per AQHI band |
 | `hkpollution brief --lat L --lng L [--json]` | Place name, street AQHI, nearest station, weather and advice in one call |
 | `hkpollution map --bbox lat0,lng0,lat1,lng1 [--json]` | PRAISE-HK raster tile link for a bounding box |
@@ -74,9 +77,23 @@ every match. `--hours` keeps the newest N hourly readings per station
 
 `beach --grade` accepts `good`, `fair`, `poor`, `very-poor`, `graded`,
 `ungraded` or `open`. `--name` matches beach or district text; `--district`
-matches the district only. In winter EPD stops grading many beaches, so an
-empty `--grade good` result does not mean the water is bad — check
-`grade_name` and `status`.
+matches the district only, and `--near` sorts by distance and adds
+`distance_km`. In winter EPD stops grading many beaches, so an empty
+`--grade good` result does not mean the water is bad — check `grade_name` and
+`status`.
+
+Grade bands follow the EPD 
+[Beach Grading System](https://www.epd.gov.hk/epd/english/environmentinhk/water/beach_quality/grading_system.html),
+measured on the geometric mean E. coli count of the five most recent sampling
+occasions: Good ≤ 24, Fair 25-180, Poor 181-610, Very Poor > 610 (or a last
+reading above 1,600).
+
+`ecoli` is joined from EPD's yearly monitoring CSV, which is published only
+after a year ends, so it can be months older than the grade. `ecoli_source`
+names the file used and `ecoli_error` says why it is missing; a missing E. coli
+block never fails the command. Quote `latest_sampled_on` whenever you cite a
+count, and remember EPD advises against swimming for up to three days after
+a tropical cyclone or heavy rain.
 
 One station:
 
@@ -132,7 +149,7 @@ protocol revision `2024-11-05`) and exposes these tools:
 | `pollutant_concentrations` | `{ "station"?: string, "hours"?: 1-24 }` |
 | `pollution_summary` | `{ "include_weather"?: boolean }` |
 | `hong_kong_weather` | `{}` |
-| `beach_water_quality` | `{ "name"?: string, "district"?: string, "grade"?: string }` |
+| `beach_water_quality` | `{ "name"?: string, "district"?: string, "grade"?: string, "lat"?: number, "lng"?: number }` |
 | `air_quality_briefing` | `{ "lat": number, "lng": number, "no_cache"?: boolean }` |
 | `health_advice` | `{ "risk"?: string, "lang"?: "en"\|"tc"\|"both" }` |
 | `source_health` | `{}` |
@@ -176,8 +193,10 @@ Errors always go to stderr; stdout stays clean for `--json`.
 - "Which station is worst right now?" → `summary --json`, read `worst` and `trend`.
 - "Where should I walk?" → `street --lat <x> --lng <y> --hours 3` for nearby hours.
 - "Will it be better tomorrow?" → `forecast` (AQHI bands) or `weather --forecast`.
-- "Is it safe to swim at X beach?" → `beach --name X`; quote the EPD grade and
-  status, and do not call an ungraded winter beach dirty or clean.
+- "Is it safe to swim at X beach?" → `beach --name X`; quote the EPD grade,
+  status, latest E. coli count with its sampling date, and do not call an
+  ungraded winter beach dirty or clean. "Which beach is nearest / cleanest
+  nearby?" → `beach --near <lat>,<lng>`; filter with `--grade good`.
 - "What does 'High' mean for me?" → `advice --risk high`; the answer is the official
   EPD wording, not a paraphrase.
 - Monitoring: `aqhi --fail-above 7` exits 3, so a cron job can act on it directly.

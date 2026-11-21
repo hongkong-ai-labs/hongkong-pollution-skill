@@ -6,6 +6,27 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `beach` joins EPD's yearly E. coli monitoring file to the grading feed, so
+  each beach now carries `ecoli`: the latest count per 100 mL, its sampling
+  date, the five most recent samples and their geometric mean — the same
+  window EPD grades on (Good ≤ 24, Fair 25-180, Poor 181-610, Very Poor > 610).
+  A missing or unpublished file degrades to `ecoli: null` with `ecoli_error`
+  instead of failing the command, and `ecoli_source` names the year used.
+- `beach --near lat,lng` sorts beaches nearest first, adds `distance_km`, and
+  the MCP `beach_water_quality` tool takes the same `lat`/`lng` pair.
+- `beach` reports `graded` and `open` counts, plus a WGS84 `latitude` and
+  `longitude` per beach.
+- `doctor` probes the beach grading feed and the yearly E. coli file, taking it
+  to eleven sources.
+
+### Changed
+
+- `beach` reads `beachgrading` (real WGS84 geometry) instead of
+  `beachgrading_GeoXY`, whose published points were far outside the territory;
+  a point outside the Hong Kong bounds is dropped rather than reported.
+
 ## [0.3.0] - 2026-11-21
 
 ### Added

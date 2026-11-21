@@ -58,10 +58,20 @@ cargo install hkpollution --locked
 brew tap hongkong-ai-labs/tap && brew install hkpollution
 ```
 
-**Container** — a 3 MB `scratch` image on both architectures:
+**Container** — a small multi-arch image, or build it locally:
 
 ```sh
 docker run --rm ghcr.io/hongkong-ai-labs/hkpollution aqhi --json
+docker build -t hkpollution .
+docker run --rm hkpollution aqhi --json
+```
+
+Apple's `container` runtime uses the same OCI image:
+
+```sh
+container build -t hkpollution .
+container run --rm hkpollution aqhi --json
+container run --rm -i hkpollution mcp
 ```
 
 Whichever route you take:
@@ -84,6 +94,7 @@ hkpollution 0.3.0
 | `hkpollution weather` | HKO temperature, humidity and warnings, optionally the nine-day forecast | table or `--json` |
 | `hkpollution advice` | Official EPD precautionary actions per AQHI risk band, English and/or Chinese | table or `--json` |
 | `hkpollution brief` | One call for a coordinate: place, street AQHI, nearest station, weather and advice | report or `--json` |
+| `hkpollution beach` | EPD beach grading (grade, status, district, WGS84 point) joined to published E. coli monitoring: latest count, five recent samples, geometric mean; `--near` sorts by distance | table or `--json` |
 | `hkpollution map` | PRAISE-HK raster tile link for a bounding box | report or `--json` |
 | `hkpollution about` | The app's about pages, privacy policy and long-term air quality links | report or `--json` |
 | `hkpollution mcp` | All of the above as MCP tools over stdio | JSON-RPC |
@@ -255,6 +266,32 @@ High (AQHI 7)
 source: EPD health advice (fetched 2026-11-21T20:53:48+08:00)
 ```
 
+### Beach water quality
+
+`beach` joins EPD's weekly grading feed to the department's yearly E. coli
+monitoring file. Each beach carries its grade and status, a WGS84 point, and
+the most recent published E. coli samples:
+
+```console
+$ hkpollution beach --near 22.23,114.17 --grade graded | head -8
+DISTRICT            BEACH                 GRADE           STATUS  DIST     E. COLI  SAMPLED
+------------------  --------------------  --------------  ------  -------  -------  ----------
+Southern District   Deep Water Bay Beach   Grade 1 - Good  open    2.4 km   2        2025-12-29
+Southern District   Repulse Bay Beach     Grade 1 - Good  open    2.8 km   1        2025-12-02
+Southern District   Middle Bay Beach      Grade 1 - Good  open    2.9 km   3        2025-12-02
+```
+
+Grades follow the [EPD Beach Grading System](https://www.epd.gov.hk/epd/english/environmentinhk/water/beach_quality/grading_system.html):
+Good ≤ 24, Fair 25-180, Poor 181-610, Very Poor > 610 E. coli per 100 mL, on
+the geometric mean of the five most recent sampling occasions (a last reading
+above 1,600 also means Very Poor). The grading feed and the E. coli file move
+at different speeds — EPD publishes a year's monitoring file only after the
+year ends — so the report names the file it used in `ecoli_source` and an
+unreadable file degrades to `ecoli: null` with an `ecoli_error` instead of
+failing. Quote `latest_sampled_on` whenever you cite a count, and note EPD's
+advice against swimming for up to three days after a tropical cyclone or
+heavy rain.
+
 ## Reliability
 
 Built for agents that call the same tool in a loop, and for cron jobs that need a
@@ -266,7 +303,7 @@ verdict rather than prose.
 | Flaky upstreams | Up to 3 attempts with 300 ms / 900 ms backoff for transport errors, 5xx and 429, honouring `Retry-After` |
 | Thresholds | `--fail-above 7` exits `3` when the worst AQHI reaches it, so `hkpollution aqhi --fail-above 7` is a monitoring check with no parsing |
 | Needing a station name | `--near 22.3375,114.263` resolves to the nearest of the 18 stations and prints the distance |
-| Drift and outages | `hkpollution doctor` probes all nine sources, reports latency and a schema check, and prints the cache location and size |
+| Drift and outages | `hkpollution doctor` probes all eleven sources, reports latency and a schema check, and prints the cache location and size |
 | Tuning | `HKPOLLUTION_CACHE_DIR`, `HKPOLLUTION_TIMEOUT_SECS`, `HKPOLLUTION_RETRIES` |
 
 ```console
@@ -282,8 +319,10 @@ EPD app forecast        ok      63   699 bytes
 EPD app monitors        ok      29   3960 bytes
 PRAISE weather          ok      74   47 bytes
 PRAISE pollutant_index  ok      607  13131 bytes
+EPD beach grading       ok      118  11275 bytes
+EPD beach E. coli       ok      96   54866 bytes
 
-summary: 9 ok, 0 failed
+summary: 11 ok, 0 failed
 ```
 
 ## MCP server
@@ -322,6 +361,13 @@ Every result is `{"content":[{"type":"text","text":"<pretty JSON>"}],"isError":f
 An upstream failure returns `isError: true` with a readable message instead of
 a transport error, so the session survives an outage.
 
+This is a **stdio-only** server: it listens on no port and has no network
+authentication layer, so there is no API-key setting. Optional keys in this
+project family apply only to HTTP MCP transports. For a container, keep stdin
+attached (`docker run --rm -i hkpollution mcp`) and let the MCP client launch
+and stop the process. There is no Worker/WASM deployment; the binary uses
+`ureq` plus an on-disk cache and is packaged as a CLI/stdio server.
+
 ```console
 $ printf '%s\n' \
     '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' \
@@ -348,6 +394,8 @@ server keeps serving until stdin closes.
 | PRAISE-HK model API (JSON, undocumented) | `https://praise-web.ust.hk:8443/api/pollutant_index` | Street-level AQHI, added health risk and pollutants at a coordinate |
 | PRAISE-HK reverse geocoding | `https://praise-web.ust.hk:8443/location/reverse_geocoding` | Place names in `brief` |
 | PRAISE-HK spatial tiles | `https://praise-web.ust.hk:8443/api/pollutant_spatial_tiles` | Raster tile links in `map` |
+| EPD beach grading (GeoJSON) | `https://cd.epic.epd.gov.hk/EPICDI/json/beach/beachgrading?lang=en` | Grade, status, district and a WGS84 point per gazetted beach |
+| EPD beach E. coli monitoring (CSV, yearly) | `https://cd.epic.epd.gov.hk/beachpsi/en/beach-historical-data-<year>-en.csv` | E. coli count per 100 mL per sampling date, from the latest complete year |
 
 A `source` of `EPD app API` or `PRAISE-HK` marks a report from one of those
 undocumented app APIs; `EPD` and `HKO` keep their existing meaning.
@@ -432,7 +480,23 @@ full upstream window (23 hours) while `hours` trims only the table:
  "source":"PRAISE-HK","fetched_at":"2026-11-21T19:44:05+08:00"}
 ```
 
-Timestamps are ISO-8601 in Hong Kong time; concentrations are µg/m³.
+`hkpollution beach --json`:
+
+```json
+{"source":"https://cd.epic.epd.gov.hk/EPICDI/json/beach/beachgrading?lang=en",
+ "count":1,"graded":1,"open":1,
+ "ecoli_source":"https://cd.epic.epd.gov.hk/beachpsi/en/beach-historical-data-2025-en.csv",
+ "ecoli_error":null,
+ "beaches":[{"name":"Silver Mine Bay Beach","district":"Islands District","grade":1,
+   "grade_name":"Grade 1 - Good","status":"open","description":"Grade 1 - Good",
+   "code":"sil","latitude":22.270278,"longitude":113.998889,"distance_km":null,
+   "ecoli":{"latest_sampled_on":"2025-12-04","latest_per_100ml":140,
+     "geometric_mean_per_100ml":29.6,"samples":160,
+     "recent":[{"sampled_on":"2025-12-04","per_100ml":140},{"sampled_on":"2025-11-24","per_100ml":14}, ...]}}]}
+```
+
+Timestamps are ISO-8601 in Hong Kong time; concentrations are µg/m³ and beach
+E. coli counts are per 100 mL.
 
 </details>
 
