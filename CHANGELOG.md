@@ -30,7 +30,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   E. coli sample) and `red_tide` within ten kilometres.
 - `history` falls back to the documented past-24-hour AQHI XML when the app
   API is unavailable, keeping the same schema with pollutant fields null.
-- `doctor` probes all fifteen sources and reports the age of the newest
+- `doctor` probes all seventeen sources and reports the age of the newest
   timestamp in each payload, flagging `stale` when a feed keeps answering with
   old data; the summary now counts `ok`, `stale` and `failed` separately.
 - `beach` joins EPD's yearly E. coli monitoring file to the grading feed, so

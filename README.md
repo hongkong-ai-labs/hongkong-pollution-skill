@@ -376,7 +376,7 @@ verdict rather than prose.
 | Flaky upstreams | Up to 3 attempts with 300 ms / 900 ms backoff for transport errors, 5xx and 429, honouring `Retry-After` |
 | Thresholds | `--fail-above 7` exits `3` when the worst AQHI reaches it, so `hkpollution aqhi --fail-above 7` is a monitoring check with no parsing |
 | Needing a station name | `--near 22.3375,114.263` resolves to the nearest of the 18 stations and prints the distance |
-| Drift and outages | `hkpollution doctor` probes all fifteen sources, reports latency, a schema check and the age of the newest data in each payload (flagging `stale`), and prints the cache location and size |
+| Drift and outages | `hkpollution doctor` probes all seventeen sources, reports latency, a schema check and the age of the newest data in each payload (flagging `stale`), and prints the cache location and size |
 | Tuning | `HKPOLLUTION_CACHE_DIR`, `HKPOLLUTION_TIMEOUT_SECS`, `HKPOLLUTION_RETRIES` |
 
 ```console
@@ -401,7 +401,7 @@ HKO UV index            ok      34   56 bytes, data 0.3 h old
 HKO radiation           ok      35   413 bytes, data 0.8 h old
 AFCD red tide           ok      1216 266998 bytes, data 0.0 h old
 
-summary: 15 ok, 0 stale, 0 failed
+summary: 17 ok, 0 stale, 0 failed
 ```
 
 ## MCP server
