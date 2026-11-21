@@ -43,6 +43,11 @@ run *ARGS:
 install:
     cargo install --path . --locked --force
 
+# Build the container and print CLI help.
+container:
+    docker build -t hkpollution:local .
+    docker run --rm hkpollution:local --help
+
 # Validate SKILL.md and the shell scripts the way CI does.
 skill-check:
     #!/usr/bin/env bash
