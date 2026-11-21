@@ -1,0 +1,8 @@
+services:
+  hkpollution:
+    build: .
+    image: hkpollution:local
+    # The MCP server speaks JSON-RPC on stdin/stdout. Keep stdin open:
+    #   docker compose run --rm -T hkpollution mcp
+    stdin_open: true
+    command: ["--help"]
