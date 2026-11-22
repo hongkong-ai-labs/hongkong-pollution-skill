@@ -470,6 +470,16 @@ not inherit the shell `PATH`.
 | `pollutant_concentrations` | `{ "station"?: string, "hours"?: integer 1-24 }` | Latest reading plus the hourly series, per station |
 | `pollution_summary` | `{ "include_weather"?: boolean }` | The CLI `summary` payload |
 | `hong_kong_weather` | `{}` | The CLI `weather` payload |
+| `beach_water_quality` | `{ "name"?: string, "district"?: string, "grade"?: string, "lat"?: number, "lng"?: number }` | Latest EPD beach gradings, optionally nearest first |
+| `water_quality` | `{ "kind"?: "river"\|"marine", "zone"?: string, "station"?: string, "months"?: integer 1-60 }` | Monthly river or marine monitoring |
+| `red_tide` | `{ "days"?: integer 1-3650, "active"?: boolean, "lat"?: number, "lng"?: number }` | AFCD red tide sightings |
+| `radiation_level` | `{ "station"?: string }` | HKO ambient gamma dose rate |
+| `uv_index` | `{}` | HKO UV index with the WHO exposure band |
+| `air_quality_stats` | `{ "days"?: integer 1-365, "station"?: string, "threshold"?: integer 1-11 }` | AQHI statistics over a window |
+| `station_comparison` | `{}` | Current AQHI ranked across general and roadside stations |
+| `environment_digest` | `{}` | One line per environmental source |
+| `recycling` | `{ "lat": number, "lng": number, "limit"?: integer 1-50, "type"?: string }` | Nearest recyclable collection points |
+| `environment_alerts` | `{ "aqhi"?: integer 1-11, "red_tide"?: boolean, "radiation"?: boolean }` | One alert evaluation across live sources |
 | `air_quality_briefing` | `{ "lat": number, "lng": number, "no_cache"?: boolean }` | The CLI `brief` payload |
 | `health_advice` | `{ "risk"?: string, "lang"?: "en"\|"tc"\|"both" }` | The CLI `advice` payload |
 | `source_health` | `{}` | The CLI `doctor` payload |
