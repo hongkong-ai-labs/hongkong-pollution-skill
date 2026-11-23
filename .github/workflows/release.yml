@@ -132,7 +132,7 @@ jobs:
           ./smoke/hkpollution --version
 
       - name: Upload tarball
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.target }}
           path: hkpollution-*.tar.gz
@@ -153,7 +153,7 @@ jobs:
           fetch-depth: 0
 
       - name: Download tarballs
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
@@ -228,7 +228,7 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Download linux tarballs
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
@@ -267,7 +267,7 @@ jobs:
     steps:
       - name: Download darwin tarballs
         if: env.BREW_TOKEN != ''
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
